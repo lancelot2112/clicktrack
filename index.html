@@ -94,7 +94,13 @@
     text-shadow:0 1px 3px rgba(0,0,0,.22);
     font-variation-settings:'wdth' 80;
   }
-  .tile .t-sub{font-size:8px; font-weight:600; color:rgba(255,255,255,.78); letter-spacing:.02em;}
+  .tile .t-sub{
+    display:block; height:10px; line-height:10px; margin-top:3px; overflow:visible; white-space:nowrap;
+    font-size:9px; font-weight:700; color:rgba(255,255,255,.85); letter-spacing:.02em;
+  }
+  .tile.level .t-count,.tile.level.split .t-count{margin-bottom:0;}
+  .tile.level.split .t-sub{margin-bottom:15px;}
+  .tile.level:not(.split) .t-sub{margin-bottom:12px;}
   .tile .t-tap,.tile .t-minus{
     position:absolute; bottom:5px;
     font-size:9px; font-weight:800; color:rgba(255,255,255,.9);
@@ -331,7 +337,25 @@ function periodValue(acc, p){
   if(p==='all') return acc.lifetime || 0;
   return acc.byDay[dayKey()] || 0;
 }
-function tileValue(a){ return periodValue(a, a.show); }
+function isLevel(a){ return a.kind === 'level'; }
+// measurement counters store the value set on each day; "current" is the newest entry
+function levelEntries(a){ return Object.keys(a.byDay).sort().map(k=>[k, a.byDay[k]]); }
+function levelCurrent(a){ const e = levelEntries(a); return e.length ? e[e.length-1][1] : 0; }
+function levelPrev(a){ const e = levelEntries(a); return e.length > 1 ? e[e.length-2][1] : null; }
+function levelAvg(a, days){
+  const d = new Date(); d.setDate(d.getDate() - (days-1));
+  const from = dayKey(d);
+  const vals = levelEntries(a).filter(([k])=> k >= from).map(([,v])=>v);
+  return vals.length ? vals.reduce((x,y)=>x+y,0)/vals.length : levelCurrent(a);
+}
+const LEVEL_STATS = [['now','Now'],['change','Change'],['avg7','7-day avg'],['avg30','30-day avg']];
+function levelStat(a, key){
+  if(key==='change'){ const p = levelPrev(a); return p===null ? 0 : levelCurrent(a) - p; }
+  if(key==='avg7') return levelAvg(a, 7);
+  if(key==='avg30') return levelAvg(a, 30);
+  return levelCurrent(a);
+}
+function tileValue(a){ return isLevel(a) ? levelCurrent(a) : periodValue(a, a.show); }
 
 /* ---------- beep ---------- */
 let actx = null;
@@ -361,14 +385,37 @@ function addAmount(id, amt){
   const el = $('#tile-'+id+' .t-count');
   if(el){ el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump'); }
 }
+// measurement: record today's value (overwrites today's earlier entry)
+function setLevel(id, v){
+  const acc = findAcc(id);
+  if(!acc || !isFinite(v)) return;
+  const k = dayKey();
+  v = Math.round(v*100)/100;
+  if(acc.byDay[k] === v) return;
+  lastAdd = {accId:id, kind:'level', dayKey:k, prev:acc.byDay[k], from:levelCurrent(acc), to:v};
+  acc.byDay[k] = v;
+  prune(acc);
+  save(); render();
+  const el = $('#tile-'+id+' .t-count');
+  if(el){ el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump'); }
+}
 function undo(){
   if(!lastAdd) return;
   const acc = findAcc(lastAdd.accId);
-  if(acc){
+  if(acc && lastAdd.kind==='level'){
+    if(lastAdd.prev === undefined) delete acc.byDay[lastAdd.dayKey];
+    else acc.byDay[lastAdd.dayKey] = lastAdd.prev;
+  }else if(acc){
     acc.byDay[lastAdd.dayKey] = (acc.byDay[lastAdd.dayKey]||0) - lastAdd.amount;
     acc.lifetime -= lastAdd.amount;
   }
   lastAdd = null; save(); render();
+}
+function undoLabel(){
+  const a = findAcc(lastAdd.accId);
+  if(!a) return '';
+  if(lastAdd.kind==='level') return `Undo · ${esc(a.name)} back to ${fmt(lastAdd.from)}`;
+  return `Undo ${signed(lastAdd.amount)} on ${esc(a.name)}`;
 }
 function signed(v){ return (v < 0 ? '−' : '+') + fmt(Math.abs(v)); }
 
@@ -476,24 +523,31 @@ function homeView(){
           <button class="newbtn2 tapbtn" onclick="go('counter',null)">+ New</button>
         </div>
       </div>
-      <p>${editMode ? 'Tap a tile to edit it.' : 'Tap to count · drag to pick an amount · hold a timer button to change it'}</p>
+      <p>${editMode ? 'Tap a tile to edit it.' : 'Tap to count · drag for any amount · hold a timer to edit it'}</p>
     </header>
     ${warnbar()}
     <div class="board ${editMode?'editing':''}">
-      ${state.accs.length ? sections : `<div class="empty">Nothing here yet.<br>Make a counter for push-ups, bets, jinxes — anything you tally.</div>`}
-      ${last && !editMode ? `<button class="undo tapbtn" onclick="undo()">Undo ${signed(lastAdd.amount)} on ${esc(last.name)}</button>` : ''}
+      ${state.accs.length ? sections : `<div class="empty">Nothing here yet.<br>Count reps, miles or jinxes, or track a number like your weight.</div>`}
+      ${last && !editMode ? `<button class="undo tapbtn" onclick="undo()">${undoLabel()}</button>` : ''}
     </div>
     ${timerBarHTML('_home', homeTimers())}`;
 }
 function isSplit(a){ return isFinite(a.sub) && a.sub > 0; }
 function addAmt(a){ return Math.abs(isFinite(a.tap) ? a.tap : 1); }
 function subAmt(a){ return a.sub; }
+function levelDelta(a){
+  const p = levelPrev(a);
+  if(p === null) return '';
+  const d = levelCurrent(a) - p;
+  if(Math.abs(d) < 0.005) return '= no change';
+  return (d > 0 ? '▲ ' : '▼ ') + fmt(Math.abs(d));
+}
 function tileHTML(a){
   const tap = isFinite(a.tap) ? a.tap : 1;
   const split = isSplit(a);
   const badge = (split || tap>0 ? '+' : '−') + fmt(Math.abs(tap));
   return `
-    <button class="tile tapbtn ${split?'split':''}" id="tile-${a.id}" style="--tile-c:${a.color}"
+    <button class="tile tapbtn ${split?'split':''} ${isLevel(a)?'level':''}" id="tile-${a.id}" style="--tile-c:${a.color}"
       onpointerdown="tileDown(event,'${a.id}')"
       onpointermove="tileMove(event,'${a.id}')"
       onpointerup="tileUp(event,'${a.id}')"
@@ -501,6 +555,7 @@ function tileHTML(a){
       oncontextmenu="return false">
       <span class="t-name">${esc(a.name)}</span>
       <span class="t-count">${fmt(tileValue(a))}</span>
+      ${isLevel(a) ? `<span class="t-sub">${levelDelta(a)}</span>` : ''}
       ${split ? `<span class="t-minus">−${fmt(subAmt(a))}</span>` : ''}
       <span class="t-tap">${badge}</span>
     </button>`;
@@ -570,7 +625,9 @@ function tileUp(ev, id){
   const a = findAcc(id);
   if(!a) return;
   if(edit){ go('counter', id); return; }
-  addAmount(id, tileTapAmount(a, tileSide(ev, a)));
+  const amt = tileTapAmount(a, tileSide(ev, a));
+  if(isLevel(a)) setLevel(id, levelCurrent(a) + amt);
+  else addAmount(id, amt);
 }
 function tileCancel(){ scrubEnd(false); cancelPress(); }
 
@@ -580,7 +637,8 @@ function tileCancel(){ scrubEnd(false); cancelPress(); }
    Full range is SCRUB_STEPS steps, so 50 for whole-number amounts, 5 for tenths. */
 const SCRUB_STEPS = 50;
 const SCRUB_INSET = 32;   // px from each screen edge where the slider pins at 0 / full range
-let scrub = null;      // {id, sign, step, range, left, width, v, base, a}
+const LEVEL_PX = 12;      // measurements: relative drag, one step per this many px
+let scrub = null;      // {id, sign, step, range, left, width, v, base, a, rel, x0}
 // step size for scrubbing: whole numbers step by 1 (5 / 50 for big amounts),
 // decimals step by their own precision
 function scrubStep(amt){
@@ -592,12 +650,14 @@ function scrubStep(amt){
 function scrubBegin(id, side, x){
   const a = findAcc(id);
   if(!a) return;
+  const x0 = pressInfo ? pressInfo.x : x;   // measure relative drags from the press point
   cancelPress();
   const start = tileTapAmount(a, side);
   const step = scrubStep(start);
   const r = $('#app').getBoundingClientRect();
   scrub = {id, sign:(start < 0 ? -1 : 1), step, range:step*SCRUB_STEPS,
-           left:r.left + SCRUB_INSET, width:r.width - 2*SCRUB_INSET, v:0, base:tileValue(a), a};
+           left:r.left + SCRUB_INSET, width:r.width - 2*SCRUB_INSET, v:0, base:tileValue(a), a,
+           rel:isLevel(a), x0};
   const d = document.createElement('div');
   d.className = 'scrub'; d.id = 'scrub';
   document.body.appendChild(d);
@@ -607,6 +667,15 @@ function scrubBegin(id, side, x){
 function scrubUpdate(x){
   if(!scrub) return;
   const s = scrub;
+  if(s.rel){   // measurement: value slides up/down from where it is now
+    const n = Math.round((x - s.x0) / LEVEL_PX);
+    s.v = Math.round((s.base + n*s.step) * 100) / 100;
+    const el = $('#scrub');
+    if(el) el.innerHTML = `
+      <div class="scrub-val" style="color:${s.a.color}">${fmt(s.v)}</div>
+      <div class="scrub-sub">${esc(s.a.name)} · was ${fmt(s.base)} · ${signed(s.v - s.base)} · release to set</div>`;
+    return;
+  }
   const raw = s.sign > 0 ? (x - s.left) / s.width : (s.left + s.width - x) / s.width;
   const f = Math.min(1, Math.max(0, raw));
   const mag = Math.round(f * s.range / s.step) * s.step;
@@ -625,7 +694,9 @@ function scrubEnd(apply){
   scrub = null;
   const el = $('#scrub');
   if(el) el.remove();
-  if(apply) addAmount(s.id, s.v);
+  if(!apply) return;
+  if(s.rel) setLevel(s.id, s.v);
+  else addAmount(s.id, s.v);
 }
 
 /* timer buttons: tap = set timer, hold = edit that button */
@@ -672,13 +743,18 @@ function counterView(id){
   const a = id ? findAcc(id) : null;
   if(id && !a){ view={name:'home'}; return homeView(); }
   const show = a ? a.show : 'today';
+  const kind = a ? (a.kind||'tally') : (view.kind||'tally');
+  const lvl = kind === 'level';
   const sel = a ? a.color : COLORS[state.accs.length % COLORS.length];
   const sw = COLORS.map(c=>`
     <button class="swatch ${c===sel?'sel':''}" style="background:${c}" onclick="pickColor(this,'${c}')"></button>`).join('');
-  const stats = a ? `
+  const stats = !a ? '' : lvl ? `
+    <div class="statrow" style="--acc:${a.color}">
+      ${LEVEL_STATS.map(([k,l])=>`<div class="stat"><b>${k==='change'?signed(levelStat(a,k)):fmt(levelStat(a,k))}</b><span>${l}</span></div>`).join('')}
+    </div>` : `
     <div class="statrow" style="--acc:${a.color}">
       ${PERIODS.map(([p,l])=>`<div class="stat"><b>${fmt(periodValue(a,p))}</b><span>${l}</span></div>`).join('')}
-    </div>` : '';
+    </div>`;
   return `
   <div class="d-top">
     <button class="back" onclick="go('home')">‹ ${a?'Back':'Cancel'}</button>
@@ -687,8 +763,15 @@ function counterView(id){
   </div>
   ${stats}
   <div class="form">
+    ${a ? '' : `
+    <div><label>Type</label>
+      <div class="seg">
+        <button class="${lvl?'':'sel'}" onclick="setNewKind('tally')">Tally</button>
+        <button class="${lvl?'sel':''}" onclick="setNewKind('level')">Measurement</button>
+      </div>
+      <div class="hint">${lvl ? 'A value you track over time, like body weight. Taps nudge it up or down.' : 'Things you count up over a day, week or month, like reps or miles.'}</div></div>`}
     <div><label>Name</label>
-      <input type="text" id="fName" value="${a?esc(a.name):''}" placeholder="Push-ups, Miles, Bets won…"></div>
+      <input type="text" id="fName" value="${a?esc(a.name):''}" placeholder="${lvl?'Weight, Resting HR, Sleep…':'Push-ups, Miles, Bets won…'}"></div>
     <div class="row">
       <div><label>Group</label>
         <input type="text" id="fGroup" list="groupList" value="${a?esc(a.group||''):''}" placeholder="Workout">
@@ -698,19 +781,25 @@ function counterView(id){
       <div><label>Unit</label>
         <input type="text" id="fUnit" value="${a?esc(a.unit||''):''}" placeholder="reps, mi, $"></div>
     </div>
+    ${lvl ? `
+    <div><label>${a?'Current value':'Starting value'}</label>
+      <input type="number" step="any" id="fVal" value="${a?levelCurrent(a):''}" inputmode="decimal" placeholder="e.g. 180"></div>` : ''}
     <div>
       <div class="row">
-        <div><label>Tap adds</label>
-          <input type="number" step="any" id="fTap" value="${a?a.tap:1}" inputmode="decimal"></div>
-        <div><label>Left side subtracts</label>
-          <input type="number" step="any" min="0" id="fSub" value="${a?(isSplit(a)?a.sub:''):1}" inputmode="decimal" placeholder="off"></div>
+        <div><label>${lvl?'Right side nudges up':'Tap adds'}</label>
+          <input type="number" step="any" id="fTap" value="${a?a.tap:(lvl?0.5:1)}" inputmode="decimal"></div>
+        <div><label>${lvl?'Left side nudges down':'Left side subtracts'}</label>
+          <input type="number" step="any" min="0" id="fSub" value="${a?(isSplit(a)?a.sub:''):(lvl?0.5:1)}" inputmode="decimal" placeholder="off"></div>
       </div>
-      <div class="hint">Right side of the tile adds, left third subtracts. Leave subtract blank for a whole-tile counter. Drag a tile to pick any amount.</div>
+      <div class="hint">${lvl
+        ? 'Tap the right of the tile to nudge up, the left to nudge down. Drag to slide the value.'
+        : 'Right side of the tile adds, left third subtracts. Leave subtract blank for a whole-tile counter. Drag a tile to pick any amount.'}</div>
     </div>
+    ${lvl ? '' : `
     <div><label>Tile shows</label>
       <div class="seg" id="segShow" data-show="${show}">
         ${PERIODS.map(([p,l])=>`<button class="${show===p?'sel':''}" onclick="pickSeg(this,'show','${p}')">${l}</button>`).join('')}
-      </div></div>
+      </div></div>`}
     <div><label>Color</label><div class="swatches" data-color="${sel}">${sw}</div></div>
     <button class="save tapbtn" onclick="saveForm(${a?`'${a.id}'`:'null'})">${a?'Save':'Create counter'}</button>
     ${a?`<button class="danger" onclick="delAcc('${a.id}')">Delete this counter</button>`:''}
@@ -718,6 +807,7 @@ function counterView(id){
 }
 
 /* ---------- form actions ---------- */
+function setNewKind(k){ view.kind = k; render(); }
 function pickColor(el,c){
   el.parentElement.dataset.color = c;
   el.parentElement.querySelectorAll('.swatch').forEach(s=>s.classList.remove('sel'));
@@ -743,15 +833,23 @@ function saveForm(id){
   const unit = $('#fUnit').value.trim();
   const group = $('#fGroup').value.trim();
   const color = $('.swatches').dataset.color;
-  const show = $('#segShow').dataset.show || 'today';
+  const seg = $('#segShow');
+  const show = seg ? (seg.dataset.show || 'today') : 'today';
+  const kind = id ? (findAcc(id).kind||'tally') : (view.kind||'tally');
   let tap = parseFloat($('#fTap').value);
   if(!isFinite(tap) || tap===0) tap = 1;
   let sub = Math.abs(parseFloat($('#fSub').value));
   if(!isFinite(sub)) sub = 0;
+  const valEl = $('#fVal');
+  const val = valEl ? parseFloat(valEl.value) : NaN;
   if(id){
-    Object.assign(findAcc(id),{name,unit,group,color,show,tap,sub});
+    const a = findAcc(id);
+    Object.assign(a,{name,unit,group,color,show,tap,sub});
+    if(kind==='level' && isFinite(val) && val !== levelCurrent(a)) setLevel(id, val);
   }else{
-    state.accs.push({id:'a'+Date.now(),kind:'tally',name,unit,group,color,show,tap,sub,lifetime:0,byDay:{}});
+    const acc = {id:'a'+Date.now(),kind,name,unit,group,color,show,tap,sub,lifetime:0,byDay:{}};
+    if(kind==='level') acc.byDay[dayKey()] = isFinite(val) ? Math.round(val*100)/100 : 0;
+    state.accs.push(acc);
   }
   save(); go('home');
 }
