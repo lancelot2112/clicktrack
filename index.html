@@ -57,7 +57,7 @@
   .tiles{display:grid; grid-template-columns:repeat(auto-fill,minmax(78px,1fr)); gap:7px;}
   .tile{
     position:relative; display:flex; flex-direction:column; align-items:flex-start; gap:0; text-align:left;
-    user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; touch-action:manipulation;
+    user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; touch-action:pan-y;
     color:#fff; border-radius:14px; padding:8px 9px 7px; min-height:68px;
     background:var(--tile-c,#888);
     background:
@@ -104,6 +104,18 @@
   .empty{
     margin:40px 24px; text-align:center; color:var(--ink-soft); font-size:15px; line-height:1.5;
   }
+  /* drag-to-pick-amount readout */
+  .scrub{
+    position:fixed; top:calc(14px + env(safe-area-inset-top)); left:50%; transform:translateX(-50%);
+    z-index:20; pointer-events:none; min-width:200px; max-width:calc(100% - 32px);
+    background:var(--panel); border-radius:16px; padding:12px 22px; text-align:center;
+    box-shadow:0 8px 24px rgba(20,32,43,.28);
+  }
+  .scrub-val{
+    font-size:46px; font-weight:900; line-height:1; letter-spacing:-.02em;
+    font-variant-numeric:tabular-nums; font-variation-settings:'wdth' 78;
+  }
+  .scrub-sub{margin-top:6px; font-size:12px; font-weight:600; color:var(--ink-soft); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
 
   /* ---------- detail ---------- */
   .d-top{display:flex; align-items:center; padding:14px 10px 0; gap:6px;}
@@ -448,7 +460,7 @@ function homeView(){
         <h1>ClickTrack</h1>
         <button class="newbtn2 tapbtn" onclick="go('form',null)">+ New</button>
       </div>
-      <p>Tap a tile to count. Hold a tile or timer button to adjust it.</p>
+      <p>Tap a tile to count, drag it to pick an amount. Hold a tile or timer button to adjust it.</p>
     </header>
     ${warnbar()}
     <div class="board">
@@ -476,9 +488,9 @@ function tileHTML(a){
   return `
     <button class="tile tapbtn ${split?'split':''}" id="tile-${a.id}" style="--tile-c:${a.color}"
       onpointerdown="tileDown(event,'${a.id}')"
-      onpointermove="pressMove(event)"
+      onpointermove="tileMove(event,'${a.id}')"
       onpointerup="tileUp(event,'${a.id}')"
-      onpointercancel="cancelPress()"
+      onpointercancel="tileCancel()"
       oncontextmenu="return false">
       <span class="t-name">${esc(a.name)}</span>
       <span class="t-count">${fmt(tileValue(a))}</span>
@@ -516,20 +528,82 @@ function cancelPress(){
   pressInfo = null;
 }
 
-/* tiles: tap = count (left third subtracts on split tiles), hold = quick edit */
-function tileDown(ev, id){ pressDown(ev, 'tile-'+id, ()=>openTileSheet(id)); }
+/* tiles: tap = count (left third subtracts on split tiles),
+   drag sideways = scrub an arbitrary amount and apply it once on release,
+   hold = quick edit */
+function tileSide(ev, a){   // -1 = left (subtract) zone, +1 = right (add) zone
+  if(!isSplit(a)) return 1;
+  const r = ev.currentTarget.getBoundingClientRect();
+  return (ev.clientX - r.left) < r.width*SPLIT_AT ? -1 : 1;
+}
+function tileTapAmount(a, side){
+  if(!isSplit(a)) return isFinite(a.tap) ? a.tap : 1;
+  return side < 0 ? -subAmt(a) : addAmt(a);
+}
+function tileDown(ev, id){
+  const a = findAcc(id);
+  if(!a) return;
+  try{ ev.currentTarget.setPointerCapture(ev.pointerId); }catch(e){}
+  pressDown(ev, 'tile-'+id, ()=>openTileSheet(id));
+  pressInfo.side = tileSide(ev, a);
+}
+function tileMove(ev, id){
+  if(scrub){ scrubUpdate(ev.clientX); return; }
+  if(!pressInfo || pressInfo.key!=='tile-'+id || pressInfo.long) return;
+  const dx = ev.clientX - pressInfo.x, dy = ev.clientY - pressInfo.y;
+  if(Math.abs(dx) > 12 && Math.abs(dx) >= Math.abs(dy)) scrubBegin(id, pressInfo.side, pressInfo.x);
+  else if(Math.abs(dy) > 12) cancelPress();   // vertical = scrolling
+}
 function tileUp(ev, id){
+  if(scrub){ scrubEnd(true); return; }
   if(!pressUp('tile-'+id)) return;
   const a = findAcc(id);
   if(!a) return;
-  const tap = isFinite(a.tap) ? a.tap : 1;
-  if(isSplit(a)){
-    const r = ev.currentTarget.getBoundingClientRect();
-    const left = (ev.clientX - r.left) < r.width*SPLIT_AT;
-    addAmount(id, left ? -subAmt(a) : addAmt(a));
-  }else{
-    addAmount(id, tap);
-  }
+  addAmount(id, tileTapAmount(a, tileSide(ev, a)));
+}
+function tileCancel(){ scrubEnd(false); cancelPress(); }
+
+/* ---------- scrub: drag left/right to dial in an amount ---------- */
+const SCRUB_PX = 12;   // pixels of drag per step
+let scrub = null;      // {id, start, step, x0, v, base, a}
+// step size for scrubbing: whole numbers step by 1 (5 / 50 for big amounts),
+// decimals step by their own precision
+function scrubStep(amt){
+  const n = Math.abs(amt);
+  if(Number.isInteger(n)) return n >= 500 ? 50 : n >= 50 ? 5 : 1;
+  const d = Math.min(2, (String(n).split('.')[1] || '').length);
+  return Math.pow(10, -d);
+}
+function scrubBegin(id, side, x0){
+  const a = findAcc(id);
+  if(!a) return;
+  cancelPress();
+  const start = tileTapAmount(a, side);
+  scrub = {id, start, step:scrubStep(start), x0, v:start, base:tileValue(a), a};
+  const d = document.createElement('div');
+  d.className = 'scrub'; d.id = 'scrub';
+  document.body.appendChild(d);
+  if(navigator.vibrate) navigator.vibrate(8);
+  scrubUpdate(x0);
+}
+function scrubUpdate(x){
+  if(!scrub) return;
+  const n = Math.round((x - scrub.x0) / SCRUB_PX);
+  scrub.v = Math.round((scrub.start + n*scrub.step) * 100) / 100;
+  const v = scrub.v, a = scrub.a;
+  const sign = v > 0 ? '+' : v < 0 ? '−' : '';
+  const el = $('#scrub');
+  if(el) el.innerHTML = `
+    <div class="scrub-val" style="color:${a.color}">${sign}${fmt(Math.abs(v))}</div>
+    <div class="scrub-sub">${esc(a.name)} · ${fmt(scrub.base)} → ${fmt(scrub.base + v)} · release to apply</div>`;
+}
+function scrubEnd(apply){
+  if(!scrub) return;
+  const s = scrub;
+  scrub = null;
+  const el = $('#scrub');
+  if(el) el.remove();
+  if(apply) addAmount(s.id, s.v);
 }
 
 /* timer buttons: tap = set timer, hold = edit that button */
