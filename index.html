@@ -86,11 +86,21 @@
     font-variation-settings:'wdth' 80;
   }
   .tile .t-sub{font-size:8px; font-weight:600; color:rgba(255,255,255,.78); letter-spacing:.02em;}
-  .tile .t-tap{
-    position:absolute; right:6px; bottom:5px;
+  .tile .t-tap,.tile .t-minus{
+    position:absolute; bottom:5px;
     font-size:9px; font-weight:800; color:rgba(255,255,255,.9);
     background:rgba(0,0,0,.20); padding:2px 6px; border-radius:999px;
   }
+  .tile .t-tap{right:6px;}
+  .tile .t-minus{left:6px;}
+  /* split tile: left third subtracts, right two-thirds add */
+  .tile.split{min-height:78px;}
+  .tile.split::before{
+    content:''; position:absolute; left:0; top:0; bottom:0; width:36%;
+    background:rgba(0,0,0,.13); border-radius:14px 0 0 14px; pointer-events:none;
+  }
+  .tile>span{position:relative;}
+  .tile.split .t-count{margin-bottom:15px;}
   .empty{
     margin:40px 24px; text-align:center; color:var(--ink-soft); font-size:15px; line-height:1.5;
   }
@@ -141,6 +151,7 @@
   .t-chips button{
     background:var(--press); font-weight:700; font-size:13px;
     padding:9px 14px; border-radius:999px;
+    user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; touch-action:manipulation;
   }
   .t-chips button.reset{background:none; border:2px solid var(--line); color:var(--ink-soft);}
   .t-main{
@@ -166,7 +177,7 @@
 
   /* ---------- form ---------- */
   .form{padding:10px 20px 40px; display:flex; flex-direction:column; gap:16px;}
-  .form label{font-size:13px; font-weight:700; color:var(--ink-soft); display:block; margin-bottom:6px;}
+  .form label,.sheet label{font-size:13px; font-weight:700; color:var(--ink-soft); display:block; margin-bottom:6px;}
   .swatches{display:flex; gap:10px;}
   .swatch{width:40px; height:40px; border-radius:50%; border:3px solid transparent;}
   .swatch.sel{border-color:var(--ink);}
@@ -176,6 +187,25 @@
   }
   .form .danger{color:var(--c1); font-weight:700; padding:12px; font-size:14px;}
   .hint{font-size:12px; color:var(--ink-soft); margin-top:4px;}
+
+  /* ---------- quick-edit sheet (hold a tile or timer button) ---------- */
+  .backdrop{
+    position:fixed; inset:0; z-index:10; background:rgba(20,32,43,.45);
+    display:flex; align-items:flex-end; justify-content:center;
+  }
+  .sheet{
+    background:var(--panel); width:100%; max-width:520px;
+    border-radius:18px 18px 0 0; display:flex; flex-direction:column; gap:14px;
+    padding:18px 20px calc(20px + env(safe-area-inset-bottom));
+  }
+  .sheet h3{margin:0; font-size:17px; font-weight:800; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .sheet input{font-size:18px;}
+  .sheet .row{display:flex; gap:10px; align-items:center;}
+  .sheet .done{
+    flex:1; background:var(--ink); color:#fff; font-weight:800; font-size:16px;
+    padding:14px; border-radius:12px;
+  }
+  .sheet .link{color:var(--ink-soft); font-weight:700; font-size:14px; padding:12px; text-decoration:underline;}
 </style>
 </head>
 <body>
@@ -364,7 +394,12 @@ function timerBarHTML(id, presets){
         <button class="t-main tapbtn" onclick="toggleTimer('${id}')">Start</button>
       </div>
       <div class="t-chips">
-        ${presets.map(s=>`<button class="tapbtn" onclick="setTimerTo('${id}',${s})">${fmtTime(s)}</button>`).join('')}
+        ${presets.map((s,i)=>`<button class="tapbtn"
+          onpointerdown="chipDown(event,'${id}',${i})"
+          onpointermove="pressMove(event)"
+          onpointerup="chipUp(event,'${id}',${i})"
+          onpointercancel="cancelPress()"
+          oncontextmenu="return false">${fmtTime(s)}</button>`).join('')}
         <button class="reset tapbtn" onclick="resetTimer('${id}')">Reset</button>
       </div>
       <div class="t-track"><div class="t-fill"></div></div>
@@ -372,7 +407,12 @@ function timerBarHTML(id, presets){
 }
 
 /* ---------- views ---------- */
-const HOME_TIMER = [30,60,90];
+function homeTimers(){ return state.homeTimers || [30,60,90]; }
+function presetsFor(id){
+  if(id==='_home') return homeTimers();
+  const a = findAcc(id);
+  return a ? timerPresets(a) : [];
+}
 function render(){
   const app = $('#app');
   if(view.name==='home') app.innerHTML = homeView();
@@ -386,7 +426,7 @@ function render(){
     }
   }
   if(view.name==='home'){
-    tstate('_home', HOME_TIMER[0]);
+    tstate('_home', homeTimers()[0]);
     updateTimerUI('_home');
   }
 }
@@ -408,63 +448,156 @@ function homeView(){
         <h1>ClickTrack</h1>
         <button class="newbtn2 tapbtn" onclick="go('form',null)">+ New</button>
       </div>
-      <p>Tap a tile to count. Hold it to open.</p>
+      <p>Tap a tile to count. Hold a tile or timer button to adjust it.</p>
     </header>
     ${warnbar()}
     <div class="board">
       ${state.accs.length ? sections : `<div class="empty">Nothing here yet.<br>Make a counter for push-ups, bets, jinxes — anything you tally.</div>`}
     </div>
-    ${timerBarHTML('_home', HOME_TIMER)}`;
+    ${timerBarHTML('_home', homeTimers())}`;
 }
 function tileValue(a){
   if(a.show==='month') return month(a);
   if(a.show==='lifetime') return a.lifetime||0;
   return today(a);
 }
+function isSplit(a){ return a.split !== false; }   // split on unless turned off
 function tileHTML(a){
   const tap = isFinite(a.tap) ? a.tap : 1;
-  const badge = (tap>0 ? '+' : '−') + fmt(Math.abs(tap));
+  const split = isSplit(a);
+  const badge = (split || tap>0 ? '+' : '−') + fmt(Math.abs(tap));
   return `
-    <button class="tile tapbtn" id="tile-${a.id}" style="--tile-c:${a.color}"
+    <button class="tile tapbtn ${split?'split':''}" id="tile-${a.id}" style="--tile-c:${a.color}"
       onpointerdown="tileDown(event,'${a.id}')"
-      onpointermove="tileMove(event)"
+      onpointermove="pressMove(event)"
       onpointerup="tileUp(event,'${a.id}')"
       onpointercancel="cancelPress()"
       oncontextmenu="return false">
       <span class="t-name">${esc(a.name)}</span>
       <span class="t-count">${fmt(tileValue(a))}</span>
+      ${split ? `<span class="t-minus">−${fmt(Math.abs(tap))}</span>` : ''}
       <span class="t-tap">${badge}</span>
     </button>`;
 }
 
-/* tap = add, hold = open */
+/* generic tap-vs-hold: short press = onTap, ~450ms hold = onLong */
+const SPLIT_AT = 0.36;   // fraction of tile width that is the "−" zone
 let pressInfo = null;
-function tileDown(ev, id){
+function pressDown(ev, key, onLong){
   cancelPress();
-  pressInfo = {id, x:ev.clientX, y:ev.clientY, long:false,
+  pressInfo = {key, x:ev.clientX, y:ev.clientY, long:false,
     t:setTimeout(()=>{
-      if(pressInfo && pressInfo.id===id){
+      if(pressInfo && pressInfo.key===key){
         pressInfo.long = true;
         if(navigator.vibrate) navigator.vibrate(15);
-        go('detail', id);
+        onLong();
       }
     }, 450)};
 }
-function tileMove(ev){
+function pressMove(ev){
   if(pressInfo && (Math.abs(ev.clientX-pressInfo.x)>12 || Math.abs(ev.clientY-pressInfo.y)>12)) cancelPress();
 }
-function tileUp(ev, id){
-  if(!pressInfo || pressInfo.id!==id){ cancelPress(); return; }
+// returns true when the release completes a short tap
+function pressUp(key){
+  if(!pressInfo || pressInfo.key!==key){ cancelPress(); return false; }
   const wasLong = pressInfo.long;
   cancelPress();
-  if(!wasLong){
-    const a = findAcc(id);
-    addAmount(id, (a && isFinite(a.tap)) ? a.tap : 1);
-  }
+  return !wasLong;
 }
 function cancelPress(){
   if(pressInfo) clearTimeout(pressInfo.t);
   pressInfo = null;
+}
+
+/* tiles: tap = count (left third subtracts on split tiles), hold = quick edit */
+function tileDown(ev, id){ pressDown(ev, 'tile-'+id, ()=>openTileSheet(id)); }
+function tileUp(ev, id){
+  if(!pressUp('tile-'+id)) return;
+  const a = findAcc(id);
+  if(!a) return;
+  const tap = isFinite(a.tap) ? a.tap : 1;
+  if(isSplit(a)){
+    const r = ev.currentTarget.getBoundingClientRect();
+    const left = (ev.clientX - r.left) < r.width*SPLIT_AT;
+    addAmount(id, left ? -Math.abs(tap) : Math.abs(tap));
+  }else{
+    addAmount(id, tap);
+  }
+}
+
+/* timer buttons: tap = set timer, hold = edit that button */
+function chipDown(ev, id, i){ pressDown(ev, 'chip-'+id+'-'+i, ()=>openTimerSheet(id, i)); }
+function chipUp(ev, id, i){
+  if(!pressUp('chip-'+id+'-'+i)) return;
+  const p = presetsFor(id);
+  if(i in p) setTimerTo(id, p[i]);
+}
+
+/* ---------- quick-edit sheet ---------- */
+function openSheet(html){
+  closeSheet();
+  const d = document.createElement('div');
+  d.className = 'backdrop'; d.id = 'sheet';
+  d.innerHTML = `<div class="sheet">${html}</div>`;
+  const opened = Date.now();
+  // ignore the click that trails the long press itself
+  d.addEventListener('click', e=>{ if(e.target===d && Date.now()-opened>400) closeSheet(); });
+  document.body.appendChild(d);
+}
+function closeSheet(){ const d = $('#sheet'); if(d) d.remove(); }
+
+function openTileSheet(id){
+  const a = findAcc(id);
+  if(!a) return;
+  const tap = isFinite(a.tap) ? a.tap : 1;
+  const sp = isSplit(a);
+  openSheet(`
+    <h3>${esc(a.name)}</h3>
+    <div><label>Each tap adds</label>
+      <input type="number" step="any" id="sTap" value="${tap}" inputmode="decimal"
+        onkeydown="if(event.key==='Enter')saveTileSheet('${id}')"></div>
+    <div><label>Tile</label>
+      <div class="seg" id="segSplit" data-split="${sp?'1':'0'}">
+        <button class="${sp?'':'sel'}" onclick="pickSeg(this,'split','0')">Whole tile adds</button>
+        <button class="${sp?'sel':''}" onclick="pickSeg(this,'split','1')">Left −, right +</button>
+      </div></div>
+    <div class="row">
+      <button class="link tapbtn" onclick="go('detail','${id}')">Details ›</button>
+      <button class="done tapbtn" onclick="saveTileSheet('${id}')">Done</button>
+    </div>`);
+}
+function saveTileSheet(id){
+  const a = findAcc(id);
+  if(!a) return;
+  let tap = parseFloat($('#sTap').value);
+  if(!isFinite(tap) || tap===0) tap = 1;
+  a.tap = tap;
+  a.split = $('#segSplit').dataset.split === '1';
+  closeSheet(); save(); render();
+}
+
+function openTimerSheet(id, i){
+  const p = presetsFor(id);
+  if(!(i in p)) return;
+  openSheet(`
+    <h3>Timer button</h3>
+    <div><label>Time (m:ss or seconds)</label>
+      <input type="text" id="sTime" value="${fmtTime(p[i])}" inputmode="numeric"
+        onkeydown="if(event.key==='Enter')saveTimerSheet('${id}',${i})"></div>
+    <div class="row"><button class="done tapbtn" onclick="saveTimerSheet('${id}',${i})">Done</button></div>`);
+}
+function saveTimerSheet(id, i){
+  const s = parseTimeStr($('#sTime').value);
+  if(!isFinite(s) || s<=0){ $('#sTime').focus(); return; }
+  if(id==='_home'){
+    const p = homeTimers().slice(); p[i] = s; state.homeTimers = p;
+  }else{
+    const a = findAcc(id);
+    if(!a) return;
+    const p = timerPresets(a).slice(); p[i] = s; a.timers = p;
+  }
+  closeSheet(); save(); render();
+  if(!tstate(id).running) setTimerTo(id, s);
 }
 
 function detailView(id){
@@ -501,6 +634,7 @@ function detailView(id){
 function formView(id){
   const a = id ? findAcc(id) : null;
   const show = a ? (a.show||'today') : 'today';
+  const sp = a ? isSplit(a) : true;
   const sel = a ? a.color : COLORS[state.accs.length % COLORS.length];
   const sw = COLORS.map(c=>`
     <button class="swatch ${c===sel?'sel':''}" style="background:${c}" onclick="pickColor(this,'${c}')"></button>`).join('');
@@ -523,7 +657,13 @@ function formView(id){
       <input type="text" id="fUnit" value="${a?esc(a.unit||''):''}" placeholder="reps, $, jinxes"></div>
     <div><label>Tap on tile adds</label>
       <input type="number" step="any" id="fTap" value="${a?(isFinite(a.tap)?a.tap:1):1}" inputmode="decimal">
-      <div class="hint">Applied when you tap the tile on the main screen. Use a negative number to subtract. Hold the tile to open details.</div></div>
+      <div class="hint">Applied when you tap the tile on the main screen. Hold the tile there to change it quickly.</div></div>
+    <div><label>Tile</label>
+      <div class="seg" id="segSplit" data-split="${sp?'1':'0'}">
+        <button class="${sp?'':'sel'}" onclick="pickSeg(this,'split','0')">Whole tile adds</button>
+        <button class="${sp?'sel':''}" onclick="pickSeg(this,'split','1')">Left −, right +</button>
+      </div>
+      <div class="hint">Split tiles subtract on the left third and add on the right.</div></div>
     <div><label>Quick-add buttons</label>
       <input type="text" id="fPresets" value="${a?a.presets.join(', '):'1, 5, 10'}" placeholder="1, 5, 10">
       <div class="hint">Comma-separated amounts. Decimals fine (0.5, 2.5).</div></div>
@@ -531,10 +671,10 @@ function formView(id){
       <input type="text" id="fTimers" value="${a?timerPresets(a).map(fmtTime).join(', '):'0:30, 1:00, 1:30'}" placeholder="0:30, 1:00, 2:00">
       <div class="hint">Seconds or m:ss, comma-separated. Leave blank for no timer on this counter.</div></div>
     <div><label>Tile shows</label>
-      <div class="seg" data-show="${show}">
-        <button class="${show==='today'?'sel':''}" onclick="pickShow(this,'today')">Today</button>
-        <button class="${show==='month'?'sel':''}" onclick="pickShow(this,'month')">This month</button>
-        <button class="${show==='lifetime'?'sel':''}" onclick="pickShow(this,'lifetime')">Lifetime</button>
+      <div class="seg" id="segShow" data-show="${show}">
+        <button class="${show==='today'?'sel':''}" onclick="pickSeg(this,'show','today')">Today</button>
+        <button class="${show==='month'?'sel':''}" onclick="pickSeg(this,'show','month')">This month</button>
+        <button class="${show==='lifetime'?'sel':''}" onclick="pickSeg(this,'show','lifetime')">Lifetime</button>
       </div></div>
     <div><label>Color</label><div class="swatches" data-color="${sel}">${sw}</div></div>
     <button class="save tapbtn" onclick="saveForm(${a?`'${a.id}'`:'null'})">${a?'Save changes':'Create counter'}</button>
@@ -548,8 +688,8 @@ function pickColor(el,c){
   el.parentElement.querySelectorAll('.swatch').forEach(s=>s.classList.remove('sel'));
   el.classList.add('sel');
 }
-function pickShow(el,v){
-  el.parentElement.dataset.show = v;
+function pickSeg(el,key,v){
+  el.parentElement.dataset[key] = v;
   el.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('sel'));
   el.classList.add('sel');
 }
@@ -572,17 +712,18 @@ function saveForm(id){
   const tmr = $('#fTimers').value.split(',')
     .map(parseTimeStr).filter(n=>isFinite(n)&&n>0).slice(0,5);
   const color = $('.swatches').dataset.color;
-  const show = $('.seg').dataset.show || 'today';
+  const show = $('#segShow').dataset.show || 'today';
+  const split = $('#segSplit').dataset.split === '1';
   let tap = parseFloat($('#fTap').value);
   if(!isFinite(tap) || tap===0) tap = 1;
   if(id){
     const a = findAcc(id);
-    Object.assign(a,{name,unit,group,color,show,tap,presets:presets.length?presets:[1],timers:tmr});
+    Object.assign(a,{name,unit,group,color,show,tap,split,presets:presets.length?presets:[1],timers:tmr});
     delete timers[id]; // pick up new default next open
     view = {name:'detail', id};
   }else{
     const nid = 'a'+Date.now();
-    state.accs.push({id:nid,name,unit,group,color,show,tap,presets:presets.length?presets:[1],timers:tmr,lifetime:0,byDay:{}});
+    state.accs.push({id:nid,name,unit,group,color,show,tap,split,presets:presets.length?presets:[1],timers:tmr,lifetime:0,byDay:{}});
     view = {name:'detail', id:nid};
   }
   save(); render();
@@ -598,6 +739,7 @@ function addCustom(id){
   addAmount(id, v);
 }
 function go(name,id){
+  closeSheet();
   view = {name, id};
   render();
 }
