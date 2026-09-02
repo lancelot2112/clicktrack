@@ -39,6 +39,12 @@
     padding:12px 14px; width:100%;
   }
   input:focus{outline:none; border-color:var(--ink);}
+  select{
+    font:inherit; font-weight:600; color:var(--ink); background:var(--panel);
+    border:2px solid var(--line); border-radius:10px; padding:12px 14px; width:100%;
+    -webkit-appearance:none; appearance:none;
+  }
+  select:focus{outline:none; border-color:var(--ink);}
 
   /* ---------- home ---------- */
   header.home{padding:22px 18px 6px;}
@@ -98,7 +104,9 @@
     display:block; height:10px; line-height:10px; margin-top:3px; overflow:visible; white-space:nowrap;
     font-size:9px; font-weight:700; color:rgba(255,255,255,.85); letter-spacing:.02em;
   }
-  .tile.level .t-count,.tile.level.split .t-count{margin-bottom:0;}
+  .tile.level .t-count,.tile.level.split .t-count,.tile.ratio .t-count{margin-bottom:0;}
+  .tile.ratio .t-sub{margin-bottom:2px;}
+  .tile.ratio{box-shadow:inset 0 0 0 2px rgba(255,255,255,.35), 0 3px 8px color-mix(in srgb, var(--tile-c) 35%, transparent);}
   .tile.level.split .t-sub{margin-bottom:15px;}
   .tile.level:not(.split) .t-sub{margin-bottom:12px;}
   .tile .t-tap,.tile .t-minus{
@@ -355,7 +363,21 @@ function levelStat(a, key){
   if(key==='avg30') return levelAvg(a, 30);
   return levelCurrent(a);
 }
-function tileValue(a){ return isLevel(a) ? levelCurrent(a) : periodValue(a, a.show); }
+function isRatio(a){ return a.kind === 'ratio'; }
+// ratio counters divide two tallies over the same period (miles ÷ hours = speed)
+function ratioValue(a, p){
+  const n = findAcc(a.num), d = findAcc(a.den);
+  if(!n || !d) return NaN;
+  const dv = periodValue(d, p);
+  return dv ? periodValue(n, p) / dv : NaN;
+}
+function fmtRatio(v){ return isFinite(v) ? fmt(v) : '—'; }
+function tallies(){ return state.accs.filter(a=>(a.kind||'tally')==='tally'); }
+function tileValue(a){
+  if(isLevel(a)) return levelCurrent(a);
+  if(isRatio(a)) return ratioValue(a, a.show);
+  return periodValue(a, a.show);
+}
 
 /* ---------- beep ---------- */
 let actx = null;
@@ -543,6 +565,19 @@ function levelDelta(a){
   return (d > 0 ? '▲ ' : '▼ ') + fmt(Math.abs(d));
 }
 function tileHTML(a){
+  if(isRatio(a)){
+    const n = findAcc(a.num), d = findAcc(a.den);
+    return `
+    <button class="tile tapbtn ratio" id="tile-${a.id}" style="--tile-c:${a.color}"
+      onpointerdown="tileDown(event,'${a.id}')"
+      onpointerup="tileUp(event,'${a.id}')"
+      onpointercancel="tileCancel()"
+      oncontextmenu="return false">
+      <span class="t-name">${esc(a.name)}</span>
+      <span class="t-count">${fmtRatio(tileValue(a))}</span>
+      <span class="t-sub">${n && d ? esc(n.name)+' ÷ '+esc(d.name) : 'pick two counters'}</span>
+    </button>`;
+  }
   const tap = isFinite(a.tap) ? a.tap : 1;
   const split = isSplit(a);
   const badge = (split || tap>0 ? '+' : '−') + fmt(Math.abs(tap));
@@ -606,6 +641,7 @@ function toggleEdit(){ editMode = !editMode; render(); }
 function tileDown(ev, id){
   const a = findAcc(id);
   if(!a) return;
+  if(isRatio(a) && !editMode) return;   // computed tile: nothing to tap
   try{ ev.currentTarget.setPointerCapture(ev.pointerId); }catch(e){}
   pressDown(ev, 'tile-'+id, null);
   pressInfo.side = tileSide(ev, a);
@@ -744,11 +780,15 @@ function counterView(id){
   if(id && !a){ view={name:'home'}; return homeView(); }
   const show = a ? a.show : 'today';
   const kind = a ? (a.kind||'tally') : (view.kind||'tally');
-  const lvl = kind === 'level';
+  const lvl = kind === 'level', rat = kind === 'ratio';
+  const pickOpts = (cur)=> tallies().map(t=>`<option value="${t.id}" ${t.id===cur?'selected':''}>${esc(t.name)}</option>`).join('');
   const sel = a ? a.color : COLORS[state.accs.length % COLORS.length];
   const sw = COLORS.map(c=>`
     <button class="swatch ${c===sel?'sel':''}" style="background:${c}" onclick="pickColor(this,'${c}')"></button>`).join('');
-  const stats = !a ? '' : lvl ? `
+  const stats = !a ? '' : rat ? `
+    <div class="statrow" style="--acc:${a.color}">
+      ${PERIODS.map(([p,l])=>`<div class="stat"><b>${fmtRatio(ratioValue(a,p))}</b><span>${l}</span></div>`).join('')}
+    </div>` : lvl ? `
     <div class="statrow" style="--acc:${a.color}">
       ${LEVEL_STATS.map(([k,l])=>`<div class="stat"><b>${k==='change'?signed(levelStat(a,k)):fmt(levelStat(a,k))}</b><span>${l}</span></div>`).join('')}
     </div>` : `
@@ -766,12 +806,15 @@ function counterView(id){
     ${a ? '' : `
     <div><label>Type</label>
       <div class="seg">
-        <button class="${lvl?'':'sel'}" onclick="setNewKind('tally')">Tally</button>
+        <button class="${kind==='tally'?'sel':''}" onclick="setNewKind('tally')">Tally</button>
         <button class="${lvl?'sel':''}" onclick="setNewKind('level')">Measurement</button>
+        <button class="${rat?'sel':''}" onclick="setNewKind('ratio')">Ratio</button>
       </div>
-      <div class="hint">${lvl ? 'A value you track over time, like body weight. Taps nudge it up or down.' : 'Things you count up over a day, week or month, like reps or miles.'}</div></div>`}
+      <div class="hint">${rat ? 'One tally divided by another over the same period, like miles ÷ hours for speed. Read-only.'
+        : lvl ? 'A value you track over time, like body weight. Taps nudge it up or down.'
+        : 'Things you count up over a day, week or month, like reps or miles.'}</div></div>`}
     <div><label>Name</label>
-      <input type="text" id="fName" value="${a?esc(a.name):''}" placeholder="${lvl?'Weight, Resting HR, Sleep…':'Push-ups, Miles, Bets won…'}"></div>
+      <input type="text" id="fName" value="${a?esc(a.name):''}" placeholder="${rat?'Speed, Pace, Avg set…':lvl?'Weight, Resting HR, Sleep…':'Push-ups, Miles, Bets won…'}"></div>
     <div class="row">
       <div><label>Group</label>
         <input type="text" id="fGroup" list="groupList" value="${a?esc(a.group||''):''}" placeholder="Workout">
@@ -781,9 +824,16 @@ function counterView(id){
       <div><label>Unit</label>
         <input type="text" id="fUnit" value="${a?esc(a.unit||''):''}" placeholder="reps, mi, $"></div>
     </div>
+    ${rat ? `
+    <div class="row">
+      <div><label>Divide</label><select id="fNum">${pickOpts(a&&a.num)}</select></div>
+      <div><label>by</label><select id="fDen">${pickOpts(a&&a.den)}</select></div>
+    </div>
+    ${tallies().length < 2 ? `<div class="hint">You need two tally counters first.</div>` : ''}` : ''}
     ${lvl ? `
     <div><label>${a?'Current value':'Starting value'}</label>
       <input type="number" step="any" id="fVal" value="${a?levelCurrent(a):''}" inputmode="decimal" placeholder="e.g. 180"></div>` : ''}
+    ${rat ? '' : `
     <div>
       <div class="row">
         <div><label>${lvl?'Right side nudges up':'Tap adds'}</label>
@@ -794,7 +844,7 @@ function counterView(id){
       <div class="hint">${lvl
         ? 'Tap the right of the tile to nudge up, the left to nudge down. Drag to slide the value.'
         : 'Right side of the tile adds, left third subtracts. Leave subtract blank for a whole-tile counter. Drag a tile to pick any amount.'}</div>
-    </div>
+    </div>`}
     ${lvl ? '' : `
     <div><label>Tile shows</label>
       <div class="seg" id="segShow" data-show="${show}">
@@ -836,19 +886,27 @@ function saveForm(id){
   const seg = $('#segShow');
   const show = seg ? (seg.dataset.show || 'today') : 'today';
   const kind = id ? (findAcc(id).kind||'tally') : (view.kind||'tally');
-  let tap = parseFloat($('#fTap').value);
+  const tapEl = $('#fTap'), subEl = $('#fSub');
+  let tap = tapEl ? parseFloat(tapEl.value) : 1;
   if(!isFinite(tap) || tap===0) tap = 1;
-  let sub = Math.abs(parseFloat($('#fSub').value));
+  let sub = subEl ? Math.abs(parseFloat(subEl.value)) : 0;
   if(!isFinite(sub)) sub = 0;
+  let num, den;
+  if(kind==='ratio'){
+    num = $('#fNum').value; den = $('#fDen').value;
+    if(!num || !den || num===den){ $('#fDen').focus(); return; }
+  }
   const valEl = $('#fVal');
   const val = valEl ? parseFloat(valEl.value) : NaN;
   if(id){
     const a = findAcc(id);
     Object.assign(a,{name,unit,group,color,show,tap,sub});
+    if(kind==='ratio') Object.assign(a,{num,den});
     if(kind==='level' && isFinite(val) && val !== levelCurrent(a)) setLevel(id, val);
   }else{
     const acc = {id:'a'+Date.now(),kind,name,unit,group,color,show,tap,sub,lifetime:0,byDay:{}};
     if(kind==='level') acc.byDay[dayKey()] = isFinite(val) ? Math.round(val*100)/100 : 0;
+    if(kind==='ratio') Object.assign(acc,{num,den});
     state.accs.push(acc);
   }
   save(); go('home');
