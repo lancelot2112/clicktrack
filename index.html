@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>ClickTrack</title>
+<meta name="theme-color" content="#E9EDF0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="ClickTrack">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,400..900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#E9EDF0; --ink:#14202B; --ink-soft:#5B6B78; --panel:#FFFFFF;
+    --line:#CDD6DD; --press:#DCE3E8;
+    --c1:#E4572E; --c2:#2F9E44; --c3:#2458C5; --c4:#8E44AD; --c5:#D9A404; --c6:#0E7C86;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; height:100%;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:'Archivo',system-ui,sans-serif;
+    font-variation-settings:'wdth' 88;
+    overscroll-behavior:none;
+  }
+  #app{max-width:520px; margin:0 auto; min-height:100dvh; display:flex; flex-direction:column;}
+
+  /* ---------- shared ---------- */
+  button{font:inherit; border:none; cursor:pointer; color:inherit; background:none;}
+  .tapbtn{transition:transform .06s ease;}
+  .tapbtn:active{transform:scale(.96);}
+  input[type=text],input[type=number]{
+    font:inherit; font-weight:600; color:var(--ink);
+    background:var(--panel); border:2px solid var(--line); border-radius:10px;
+    padding:12px 14px; width:100%;
+  }
+  input:focus{outline:none; border-color:var(--ink);}
+
+  /* ---------- home ---------- */
+  header.home{padding:22px 18px 6px;}
+  .h-row{display:flex; align-items:center; justify-content:space-between;}
+  header.home h1{
+    margin:0; font-size:28px; font-weight:900; letter-spacing:-.02em;
+    font-variation-settings:'wdth' 78;
+  }
+  header.home p{margin:4px 0 0; color:var(--ink-soft); font-size:13px;}
+  .newbtn2{
+    background:var(--ink); color:#fff; font-weight:700; font-size:14px;
+    padding:10px 16px; border-radius:999px;
+  }
+  .board{flex:1; padding:4px 14px 20px;}
+  .group-h{margin:18px 4px 8px; font-size:14px; font-weight:800; color:var(--ink-soft);}
+  .tiles{display:grid; grid-template-columns:repeat(auto-fill,minmax(78px,1fr)); gap:7px;}
+  .tile{
+    position:relative; display:flex; flex-direction:column; align-items:flex-start; gap:0; text-align:left;
+    user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; touch-action:manipulation;
+    color:#fff; border-radius:14px; padding:8px 9px 7px; min-height:68px;
+    background:var(--tile-c,#888);
+    background:
+      radial-gradient(130% 90% at 18% 0%, rgba(255,255,255,.30), rgba(255,255,255,0) 55%),
+      linear-gradient(160deg,
+        color-mix(in srgb, var(--tile-c) 86%, #fff) 0%,
+        var(--tile-c) 55%,
+        color-mix(in srgb, var(--tile-c) 80%, #000) 100%);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,.35),
+      inset 0 -2px 4px rgba(0,0,0,.18),
+      0 3px 8px color-mix(in srgb, var(--tile-c) 35%, transparent);
+  }
+  .tile:active{
+    box-shadow: inset 0 2px 6px rgba(0,0,0,.28), 0 1px 3px rgba(0,0,0,.15);
+  }
+  .tile .t-name{
+    font-size:10.5px; font-weight:700; width:100%; overflow:hidden;
+    text-overflow:ellipsis; white-space:nowrap; opacity:.95;
+    text-shadow:0 1px 2px rgba(0,0,0,.18);
+  }
+  .tile .t-count{
+    font-size:22px; font-weight:900; font-variant-numeric:tabular-nums;
+    margin-top:auto; line-height:1; color:#fff;
+    text-shadow:0 1px 3px rgba(0,0,0,.22);
+    font-variation-settings:'wdth' 80;
+  }
+  .tile .t-sub{font-size:8px; font-weight:600; color:rgba(255,255,255,.78); letter-spacing:.02em;}
+  .tile .t-tap{
+    position:absolute; right:6px; bottom:5px;
+    font-size:9px; font-weight:800; color:rgba(255,255,255,.9);
+    background:rgba(0,0,0,.20); padding:2px 6px; border-radius:999px;
+  }
+  .empty{
+    margin:40px 24px; text-align:center; color:var(--ink-soft); font-size:15px; line-height:1.5;
+  }
+
+  /* ---------- detail ---------- */
+  .d-top{display:flex; align-items:center; padding:14px 10px 0; gap:6px;}
+  .d-top .back,.d-top .edit{padding:10px 12px; font-weight:700; font-size:15px; color:var(--ink-soft);}
+  .d-top .d-title{flex:1; text-align:center; font-weight:800; font-size:17px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .bignum-wrap{text-align:center; padding:18px 16px 6px;}
+  .bignum{
+    font-size:clamp(64px,24vw,110px); font-weight:900; line-height:1;
+    font-variant-numeric:tabular-nums; letter-spacing:-.03em; color:var(--acc);
+    font-variation-settings:'wdth' 76;
+  }
+  .bump{animation:bump .18s ease;}
+  @keyframes bump{40%{transform:scale(1.06);}}
+  .bignum-label{margin-top:6px; font-size:14px; color:var(--ink-soft); font-weight:600;}
+  .statrow{
+    display:flex; justify-content:center; gap:28px; padding:14px 16px 4px;
+  }
+  .stat{text-align:center;}
+  .stat b{display:block; font-size:20px; font-weight:800; font-variant-numeric:tabular-nums;}
+  .stat span{font-size:12px; color:var(--ink-soft);}
+  .presets{display:flex; flex-wrap:wrap; gap:10px; padding:18px 18px 4px; justify-content:center;}
+  .preset{
+    background:var(--acc); color:#fff; font-weight:800; font-size:20px;
+    padding:16px 22px; border-radius:14px; min-width:84px;
+  }
+  .addrow{display:flex; gap:10px; padding:14px 18px 8px;}
+  .addrow input{flex:1; font-size:18px; text-align:center;}
+  .addrow .go{
+    background:var(--ink); color:#fff; font-weight:800; font-size:16px;
+    padding:0 22px; border-radius:10px;
+  }
+  .undo{display:block; margin:2px auto 0; color:var(--ink-soft); font-size:13px; padding:8px 14px; text-decoration:underline;}
+
+  /* ---------- timer bar ---------- */
+  .timerbar{
+    margin-top:auto; background:var(--panel); border-top:2px solid var(--line);
+    padding:12px 16px calc(14px + env(safe-area-inset-bottom));
+  }
+  .timerbar .t-row{display:flex; align-items:center; gap:10px;}
+  .timerbar .t-time{
+    font-size:34px; font-weight:900; font-variant-numeric:tabular-nums; min-width:110px;
+  }
+  .timerbar .t-time.done{color:var(--c1);}
+  .t-chips{display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;}
+  .t-chips button{
+    background:var(--press); font-weight:700; font-size:13px;
+    padding:9px 14px; border-radius:999px;
+  }
+  .t-chips button.reset{background:none; border:2px solid var(--line); color:var(--ink-soft);}
+  .t-main{
+    margin-left:auto; background:var(--acc); color:#fff; font-weight:800;
+    font-size:15px; padding:12px 20px; border-radius:12px; min-width:88px;
+  }
+  .t-main.running{background:var(--ink);}
+  .t-track{height:6px; background:var(--press); border-radius:3px; margin-top:10px; overflow:hidden;}
+  .t-fill{height:100%; background:var(--acc); width:0%; border-radius:3px;}
+
+  .seg{display:flex; gap:8px;}
+  .seg button{
+    flex:1; background:var(--panel); border:2px solid var(--line);
+    border-radius:10px; padding:11px 4px; font-weight:700; font-size:14px;
+  }
+  .seg button.sel{border-color:var(--ink); background:var(--press);}
+
+  /* ---------- warn ---------- */
+  .warnbar{
+    margin:8px 14px 0; padding:10px 14px; border-radius:10px;
+    background:#FBE9E2; color:#8C3A21; font-size:13px; font-weight:600; line-height:1.4;
+  }
+
+  /* ---------- form ---------- */
+  .form{padding:10px 20px 40px; display:flex; flex-direction:column; gap:16px;}
+  .form label{font-size:13px; font-weight:700; color:var(--ink-soft); display:block; margin-bottom:6px;}
+  .swatches{display:flex; gap:10px;}
+  .swatch{width:40px; height:40px; border-radius:50%; border:3px solid transparent;}
+  .swatch.sel{border-color:var(--ink);}
+  .form .save{
+    background:var(--ink); color:#fff; font-weight:800; font-size:16px;
+    padding:16px; border-radius:12px;
+  }
+  .form .danger{color:var(--c1); font-weight:700; padding:12px; font-size:14px;}
+  .hint{font-size:12px; color:var(--ink-soft); margin-top:4px;}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const COLORS = ['#E4572E','#2F9E44','#2458C5','#8E44AD','#D9A404','#0E7C86'];
+const KEY = 'clicktrack-v1';
+let state = { accs: [] };
+let view = { name:'home' };
+let timers = {};   // per-acc timer runtime: {left,total,running,int}
+let lastAdd = null; // {accId, amount, dayKey}
+
+/* ---------- storage ---------- */
+// Uses Claude artifact storage when available; falls back to the browser's
+// localStorage when published as a normal web page (e.g. GitHub Pages).
+const store = (window.storage && window.storage.get) ? window.storage : {
+  async get(k){
+    const v = localStorage.getItem(k);
+    if(v === null) throw new Error('missing key');
+    return {key:k, value:v};
+  },
+  async set(k,v){ localStorage.setItem(k, v); return {key:k, value:v}; }
+};
+let storageOK = null;   // null = unknown, true = working, false = unavailable
+let saveTimer = null;
+
+async function load(){
+  try{
+    const r = await store.get(KEY);
+    storageOK = true;
+    if(r && r.value) state = JSON.parse(r.value);
+  }catch(e){
+    // get() throws on a missing key too, so probe with a write before giving up
+    try{
+      await store.set(KEY+'-probe','1');
+      storageOK = true;
+    }catch(e2){
+      storageOK = false;
+    }
+  }
+  render();
+}
+
+// debounce rapid taps into one write
+function save(){
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(doSave, 300);
+}
+
+async function doSave(){
+  if(storageOK === false) return; // in-memory mode
+  const payload = JSON.stringify(state);
+  for(let i=0; i<3; i++){
+    try{
+      await store.set(KEY, payload);
+      if(storageOK !== true){ storageOK = true; render(); }
+      return;
+    }catch(e){
+      await new Promise(r=>setTimeout(r, 400*(i+1)));
+    }
+  }
+  if(storageOK !== false){ storageOK = false; render(); }
+}
+
+function warnbar(){
+  return storageOK === false
+    ? `<div class="warnbar">Saving is unavailable right now — counts will reset when you close this. Your taps still work.</div>`
+    : '';
+}
+
+/* ---------- helpers ---------- */
+const $ = sel => document.querySelector(sel);
+function dayKey(d=new Date()){
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function fmt(n){
+  if(!isFinite(n)) return '0';
+  return (Math.round(n*100)/100).toLocaleString();
+}
+function today(acc){ return acc.byDay[dayKey()] || 0; }
+function month(acc){
+  const pre = dayKey().slice(0,7);
+  return Object.entries(acc.byDay).reduce((s,[k,v])=> k.startsWith(pre)? s+v : s, 0);
+}
+function findAcc(id){ return state.accs.find(a=>a.id===id); }
+function prune(acc){
+  const keys = Object.keys(acc.byDay).sort();
+  while(keys.length > 400) delete acc.byDay[keys.shift()];
+}
+
+/* ---------- beep ---------- */
+let actx = null;
+function beep(){
+  if(!actx) return;
+  [0,.35,.7].forEach(t=>{
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.type='square'; o.frequency.value=880;
+    g.gain.setValueAtTime(.001, actx.currentTime+t);
+    g.gain.exponentialRampToValueAtTime(.3, actx.currentTime+t+.02);
+    g.gain.exponentialRampToValueAtTime(.001, actx.currentTime+t+.3);
+    o.connect(g); g.connect(actx.destination);
+    o.start(actx.currentTime+t); o.stop(actx.currentTime+t+.32);
+  });
+}
+
+/* ---------- actions ---------- */
+function addAmount(id, amt){
+  const acc = findAcc(id);
+  if(!acc || !isFinite(amt) || amt===0) return;
+  const k = dayKey();
+  acc.byDay[k] = (acc.byDay[k]||0) + amt;
+  acc.lifetime = (acc.lifetime||0) + amt;
+  prune(acc);
+  lastAdd = {accId:id, amount:amt, dayKey:k};
+  save(); render();
+  const el = $('.bignum') || $('#tile-'+id+' .t-count');
+  if(el){ el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump'); }
+}
+function undo(){
+  if(!lastAdd) return;
+  const acc = findAcc(lastAdd.accId);
+  if(acc){
+    acc.byDay[lastAdd.dayKey] = (acc.byDay[lastAdd.dayKey]||0) - lastAdd.amount;
+    acc.lifetime -= lastAdd.amount;
+  }
+  lastAdd = null; save(); render();
+}
+
+/* ---------- timer ---------- */
+function timerPresets(a){ return a.timers === undefined ? [30,60,90] : a.timers; }
+function tstate(id, def){
+  if(!timers[id]) timers[id] = {left:def||60, total:def||60, running:false, int:null};
+  return timers[id];
+}
+function toggleTimer(id){
+  if(!actx) actx = new (window.AudioContext||window.webkitAudioContext)();
+  if(actx.state==='suspended') actx.resume();
+  const t = tstate(id);
+  if(t.running){
+    clearInterval(t.int); t.running=false;
+  }else{
+    if(t.left<=0) t.left = t.total;
+    t.running = true;
+    t.int = setInterval(()=>{
+      t.left--;
+      if(t.left<=0){
+        clearInterval(t.int); t.running=false; t.left=0; beep();
+        if(navigator.vibrate) navigator.vibrate([200,100,200]);
+      }
+      updateTimerUI(id);
+    },1000);
+  }
+  updateTimerUI(id);
+}
+function setTimerTo(id, s){
+  const t = tstate(id);
+  clearInterval(t.int); t.running = false;
+  t.left = t.total = s;
+  updateTimerUI(id);
+}
+function resetTimer(id){
+  const t = tstate(id);
+  clearInterval(t.int); t.running = false;
+  t.left = t.total;
+  updateTimerUI(id);
+}
+function fmtTime(s){
+  return Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
+}
+function updateTimerUI(id){
+  const t = tstate(id);
+  const time = $('.t-time'), main = $('.t-main'), fill = $('.t-fill');
+  if(!time) return;
+  time.textContent = fmtTime(t.left);
+  time.classList.toggle('done', t.left===0 && !t.running);
+  main.textContent = t.running ? 'Pause' : (t.left===0 ? 'Restart' : 'Start');
+  main.classList.toggle('running', t.running);
+  fill.style.width = t.total ? (100*(t.total-t.left)/t.total)+'%' : '0%';
+}
+
+function timerBarHTML(id, presets){
+  return `
+    <div class="timerbar">
+      <div class="t-row">
+        <div class="t-time">${fmtTime(presets[0])}</div>
+        <button class="t-main tapbtn" onclick="toggleTimer('${id}')">Start</button>
+      </div>
+      <div class="t-chips">
+        ${presets.map(s=>`<button class="tapbtn" onclick="setTimerTo('${id}',${s})">${fmtTime(s)}</button>`).join('')}
+        <button class="reset tapbtn" onclick="resetTimer('${id}')">Reset</button>
+      </div>
+      <div class="t-track"><div class="t-fill"></div></div>
+    </div>`;
+}
+
+/* ---------- views ---------- */
+const HOME_TIMER = [30,60,90];
+function render(){
+  const app = $('#app');
+  if(view.name==='home') app.innerHTML = homeView();
+  else if(view.name==='detail') app.innerHTML = detailView(view.id);
+  else if(view.name==='form') app.innerHTML = formView(view.id);
+  if(view.name==='detail'){
+    const a = findAcc(view.id);
+    if(a && timerPresets(a).length){
+      tstate(view.id, timerPresets(a)[0]);
+      updateTimerUI(view.id);
+    }
+  }
+  if(view.name==='home'){
+    tstate('_home', HOME_TIMER[0]);
+    updateTimerUI('_home');
+  }
+}
+
+function homeView(){
+  const groups = {};
+  state.accs.forEach(a=>{
+    const g = (a.group||'').trim() || 'Other';
+    (groups[g] = groups[g] || []).push(a);
+  });
+  const names = Object.keys(groups).sort((x,y)=>
+    (x==='Other')-(y==='Other') || x.localeCompare(y));
+  const sections = names.map(g=>`
+    ${(names.length>1 || g!=='Other') ? `<div class="group-h">${esc(g)}</div>` : ''}
+    <div class="tiles">${groups[g].map(tileHTML).join('')}</div>`).join('');
+  return `
+    <header class="home">
+      <div class="h-row">
+        <h1>ClickTrack</h1>
+        <button class="newbtn2 tapbtn" onclick="go('form',null)">+ New</button>
+      </div>
+      <p>Tap a tile to count. Hold it to open.</p>
+    </header>
+    ${warnbar()}
+    <div class="board">
+      ${state.accs.length ? sections : `<div class="empty">Nothing here yet.<br>Make a counter for push-ups, bets, jinxes — anything you tally.</div>`}
+    </div>
+    ${timerBarHTML('_home', HOME_TIMER)}`;
+}
+function tileValue(a){
+  if(a.show==='month') return month(a);
+  if(a.show==='lifetime') return a.lifetime||0;
+  return today(a);
+}
+function tileHTML(a){
+  const tap = isFinite(a.tap) ? a.tap : 1;
+  const badge = (tap>0 ? '+' : '−') + fmt(Math.abs(tap));
+  return `
+    <button class="tile tapbtn" id="tile-${a.id}" style="--tile-c:${a.color}"
+      onpointerdown="tileDown(event,'${a.id}')"
+      onpointermove="tileMove(event)"
+      onpointerup="tileUp(event,'${a.id}')"
+      onpointercancel="cancelPress()"
+      oncontextmenu="return false">
+      <span class="t-name">${esc(a.name)}</span>
+      <span class="t-count">${fmt(tileValue(a))}</span>
+      <span class="t-tap">${badge}</span>
+    </button>`;
+}
+
+/* tap = add, hold = open */
+let pressInfo = null;
+function tileDown(ev, id){
+  cancelPress();
+  pressInfo = {id, x:ev.clientX, y:ev.clientY, long:false,
+    t:setTimeout(()=>{
+      if(pressInfo && pressInfo.id===id){
+        pressInfo.long = true;
+        if(navigator.vibrate) navigator.vibrate(15);
+        go('detail', id);
+      }
+    }, 450)};
+}
+function tileMove(ev){
+  if(pressInfo && (Math.abs(ev.clientX-pressInfo.x)>12 || Math.abs(ev.clientY-pressInfo.y)>12)) cancelPress();
+}
+function tileUp(ev, id){
+  if(!pressInfo || pressInfo.id!==id){ cancelPress(); return; }
+  const wasLong = pressInfo.long;
+  cancelPress();
+  if(!wasLong){
+    const a = findAcc(id);
+    addAmount(id, (a && isFinite(a.tap)) ? a.tap : 1);
+  }
+}
+function cancelPress(){
+  if(pressInfo) clearTimeout(pressInfo.t);
+  pressInfo = null;
+}
+
+function detailView(id){
+  const a = findAcc(id);
+  if(!a){ view={name:'home'}; return homeView(); }
+  const presets = a.presets.map(p=>`
+    <button class="preset tapbtn" onclick="addAmount('${a.id}',${p})">+${fmt(p)}</button>`).join('');
+  return `
+  <div style="--acc:${a.color}; display:flex; flex-direction:column; min-height:100dvh;">
+    ${warnbar()}
+    <div class="d-top">
+      <button class="back" onclick="go('home')">‹ Back</button>
+      <div class="d-title">${esc(a.name)}</div>
+      <button class="edit" onclick="go('form','${a.id}')">Edit</button>
+    </div>
+    <div class="bignum-wrap">
+      <div class="bignum">${fmt(today(a))}</div>
+      <div class="bignum-label">${esc(a.unit||'')} today</div>
+    </div>
+    <div class="statrow">
+      <div class="stat"><b>${fmt(month(a))}</b><span>this month</span></div>
+      <div class="stat"><b>${fmt(a.lifetime||0)}</b><span>lifetime</span></div>
+    </div>
+    <div class="presets">${presets}</div>
+    <div class="addrow">
+      <input type="number" step="any" id="customAmt" placeholder="Amount" inputmode="decimal">
+      <button class="go tapbtn" onclick="addCustom('${a.id}')">Add</button>
+    </div>
+    ${lastAdd && lastAdd.accId===a.id ? `<button class="undo" onclick="undo()">Undo +${fmt(lastAdd.amount)}</button>` : ''}
+    ${timerPresets(a).length ? timerBarHTML(a.id, timerPresets(a)) : ''}
+  </div>`;
+}
+
+function formView(id){
+  const a = id ? findAcc(id) : null;
+  const show = a ? (a.show||'today') : 'today';
+  const sel = a ? a.color : COLORS[state.accs.length % COLORS.length];
+  const sw = COLORS.map(c=>`
+    <button class="swatch ${c===sel?'sel':''}" style="background:${c}" onclick="pickColor(this,'${c}')"></button>`).join('');
+  return `
+  <div class="d-top">
+    <button class="back" onclick="go('${a?'detail':'home'}'${a?`,'${a.id}'`:''})">‹ Cancel</button>
+    <div class="d-title">${a?'Edit counter':'New counter'}</div>
+    <span style="width:64px"></span>
+  </div>
+  <div class="form">
+    <div><label>Name</label>
+      <input type="text" id="fName" value="${a?esc(a.name):''}" placeholder="Push-ups, Bets won, Jinxes…"></div>
+    <div><label>Group</label>
+      <input type="text" id="fGroup" list="groupList" value="${a?esc(a.group||''):''}" placeholder="Workout, Games…">
+      <datalist id="groupList">
+        ${[...new Set(state.accs.map(x=>(x.group||'').trim()).filter(Boolean))].map(g=>`<option value="${esc(g)}">`).join('')}
+      </datalist>
+      <div class="hint">Counters with the same group share a section on the main screen.</div></div>
+    <div><label>Unit (optional)</label>
+      <input type="text" id="fUnit" value="${a?esc(a.unit||''):''}" placeholder="reps, $, jinxes"></div>
+    <div><label>Tap on tile adds</label>
+      <input type="number" step="any" id="fTap" value="${a?(isFinite(a.tap)?a.tap:1):1}" inputmode="decimal">
+      <div class="hint">Applied when you tap the tile on the main screen. Use a negative number to subtract. Hold the tile to open details.</div></div>
+    <div><label>Quick-add buttons</label>
+      <input type="text" id="fPresets" value="${a?a.presets.join(', '):'1, 5, 10'}" placeholder="1, 5, 10">
+      <div class="hint">Comma-separated amounts. Decimals fine (0.5, 2.5).</div></div>
+    <div><label>Timer buttons</label>
+      <input type="text" id="fTimers" value="${a?timerPresets(a).map(fmtTime).join(', '):'0:30, 1:00, 1:30'}" placeholder="0:30, 1:00, 2:00">
+      <div class="hint">Seconds or m:ss, comma-separated. Leave blank for no timer on this counter.</div></div>
+    <div><label>Tile shows</label>
+      <div class="seg" data-show="${show}">
+        <button class="${show==='today'?'sel':''}" onclick="pickShow(this,'today')">Today</button>
+        <button class="${show==='month'?'sel':''}" onclick="pickShow(this,'month')">This month</button>
+        <button class="${show==='lifetime'?'sel':''}" onclick="pickShow(this,'lifetime')">Lifetime</button>
+      </div></div>
+    <div><label>Color</label><div class="swatches" data-color="${sel}">${sw}</div></div>
+    <button class="save tapbtn" onclick="saveForm(${a?`'${a.id}'`:'null'})">${a?'Save changes':'Create counter'}</button>
+    ${a?`<button class="danger" onclick="delAcc('${a.id}')">Delete this counter</button>`:''}
+  </div>`;
+}
+
+/* ---------- form actions ---------- */
+function pickColor(el,c){
+  el.parentElement.dataset.color = c;
+  el.parentElement.querySelectorAll('.swatch').forEach(s=>s.classList.remove('sel'));
+  el.classList.add('sel');
+}
+function pickShow(el,v){
+  el.parentElement.dataset.show = v;
+  el.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('sel'));
+  el.classList.add('sel');
+}
+function parseTimeStr(s){
+  s = s.trim();
+  if(!s) return NaN;
+  if(s.includes(':')){
+    const parts = s.split(':');
+    return (parseInt(parts[0])||0)*60 + (parseInt(parts[1])||0);
+  }
+  return Math.round(parseFloat(s));
+}
+function saveForm(id){
+  const name = $('#fName').value.trim();
+  if(!name){ $('#fName').focus(); return; }
+  const unit = $('#fUnit').value.trim();
+  const group = $('#fGroup').value.trim();
+  const presets = $('#fPresets').value.split(',')
+    .map(s=>parseFloat(s)).filter(n=>isFinite(n)&&n!==0).slice(0,6);
+  const tmr = $('#fTimers').value.split(',')
+    .map(parseTimeStr).filter(n=>isFinite(n)&&n>0).slice(0,5);
+  const color = $('.swatches').dataset.color;
+  const show = $('.seg').dataset.show || 'today';
+  let tap = parseFloat($('#fTap').value);
+  if(!isFinite(tap) || tap===0) tap = 1;
+  if(id){
+    const a = findAcc(id);
+    Object.assign(a,{name,unit,group,color,show,tap,presets:presets.length?presets:[1],timers:tmr});
+    delete timers[id]; // pick up new default next open
+    view = {name:'detail', id};
+  }else{
+    const nid = 'a'+Date.now();
+    state.accs.push({id:nid,name,unit,group,color,show,tap,presets:presets.length?presets:[1],timers:tmr,lifetime:0,byDay:{}});
+    view = {name:'detail', id:nid};
+  }
+  save(); render();
+}
+function delAcc(id){
+  if(!confirm('Delete this counter and all its history?')) return;
+  state.accs = state.accs.filter(a=>a.id!==id);
+  view = {name:'home'};
+  save(); render();
+}
+function addCustom(id){
+  const v = parseFloat($('#customAmt').value);
+  addAmount(id, v);
+}
+function go(name,id){
+  view = {name, id};
+  render();
+}
+function esc(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+load();
+</script>
+</body>
+</html>
