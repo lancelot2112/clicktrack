@@ -52,6 +52,15 @@
     background:var(--ink); color:#fff; font-weight:700; font-size:14px;
     padding:10px 16px; border-radius:999px;
   }
+  .h-btns{display:flex; gap:8px;}
+  .editbtn{
+    background:none; border:2px solid var(--line); color:var(--ink-soft);
+    font-weight:700; font-size:14px; padding:8px 14px; border-radius:999px;
+  }
+  .editbtn.on{background:var(--c1); border-color:var(--c1); color:#fff;}
+  /* edit mode: tiles get a dashed ring and a gentle pulse */
+  .board.editing .tile{outline:2px dashed rgba(255,255,255,.8); outline-offset:-5px; animation:editpulse 1.2s ease-in-out infinite;}
+  @keyframes editpulse{50%{transform:scale(.97);}}
   .board{flex:1; padding:4px 14px 20px;}
   .group-h{margin:18px 4px 8px; font-size:14px; font-weight:800; color:var(--ink-soft);}
   .tiles{display:grid; grid-template-columns:repeat(auto-fill,minmax(78px,1fr)); gap:7px;}
@@ -461,12 +470,15 @@ function homeView(){
     <header class="home">
       <div class="h-row">
         <h1>ClickTrack</h1>
-        <button class="newbtn2 tapbtn" onclick="go('form',null)">+ New</button>
+        <div class="h-btns">
+          ${state.accs.length ? `<button class="editbtn tapbtn ${editMode?'on':''}" onclick="toggleEdit()">${editMode?'Cancel':'Edit'}</button>` : ''}
+          <button class="newbtn2 tapbtn" onclick="go('form',null)">+ New</button>
+        </div>
       </div>
-      <p>Tap a tile to count, drag it to pick an amount. Hold a tile or timer button to adjust it.</p>
+      <p>${editMode ? 'Tap a tile to edit it.' : 'Tap a tile to count, drag it to pick an amount. Hold a timer button to change it.'}</p>
     </header>
     ${warnbar()}
-    <div class="board">
+    <div class="board ${editMode?'editing':''}">
       ${state.accs.length ? sections : `<div class="empty">Nothing here yet.<br>Make a counter for push-ups, bets, jinxes — anything you tally.</div>`}
     </div>
     ${timerBarHTML('_home', homeTimers())}`;
@@ -507,14 +519,14 @@ const SPLIT_AT = 0.36;   // fraction of tile width that is the "−" zone
 let pressInfo = null;
 function pressDown(ev, key, onLong){
   cancelPress();
-  pressInfo = {key, x:ev.clientX, y:ev.clientY, long:false,
-    t:setTimeout(()=>{
-      if(pressInfo && pressInfo.key===key){
-        pressInfo.long = true;
-        if(navigator.vibrate) navigator.vibrate(15);
-        onLong();
-      }
-    }, 450)};
+  pressInfo = {key, x:ev.clientX, y:ev.clientY, long:false, t:null};
+  if(onLong) pressInfo.t = setTimeout(()=>{
+    if(pressInfo && pressInfo.key===key){
+      pressInfo.long = true;
+      if(navigator.vibrate) navigator.vibrate(15);
+      onLong();
+    }
+  }, 450);
 }
 function pressMove(ev){
   if(pressInfo && (Math.abs(ev.clientX-pressInfo.x)>12 || Math.abs(ev.clientY-pressInfo.y)>12)) cancelPress();
@@ -543,25 +555,30 @@ function tileTapAmount(a, side){
   if(!isSplit(a)) return isFinite(a.tap) ? a.tap : 1;
   return side < 0 ? -subAmt(a) : addAmt(a);
 }
+let editMode = false;   // header Edit → tap a tile to open its quick-edit sheet
+function toggleEdit(){ editMode = !editMode; render(); }
 function tileDown(ev, id){
   const a = findAcc(id);
   if(!a) return;
   try{ ev.currentTarget.setPointerCapture(ev.pointerId); }catch(e){}
-  pressDown(ev, 'tile-'+id, ()=>openTileSheet(id));
+  pressDown(ev, 'tile-'+id, null);
   pressInfo.side = tileSide(ev, a);
+  pressInfo.edit = editMode;
 }
 function tileMove(ev, id){
   if(scrub){ scrubUpdate(ev.clientX); return; }
-  if(!pressInfo || pressInfo.key!=='tile-'+id || pressInfo.long) return;
+  if(!pressInfo || pressInfo.key!=='tile-'+id || pressInfo.edit) return;
   const dx = ev.clientX - pressInfo.x, dy = ev.clientY - pressInfo.y;
   if(Math.abs(dx) > 12 && Math.abs(dx) >= Math.abs(dy)) scrubBegin(id, pressInfo.side, ev.clientX);
   else if(Math.abs(dy) > 12) cancelPress();   // vertical = scrolling
 }
 function tileUp(ev, id){
   if(scrub){ scrubEnd(true); return; }
+  const edit = pressInfo && pressInfo.edit;
   if(!pressUp('tile-'+id)) return;
   const a = findAcc(id);
   if(!a) return;
+  if(edit){ editMode = false; render(); openTileSheet(id); return; }
   addAmount(id, tileTapAmount(a, tileSide(ev, a)));
 }
 function tileCancel(){ scrubEnd(false); cancelPress(); }
@@ -571,6 +588,7 @@ function tileCancel(){ scrubEnd(false); cancelPress(); }
    Subtracting (started on the left zone): 0 at the right edge, full range at the left edge.
    Full range is SCRUB_STEPS steps, so 50 for whole-number amounts, 5 for tenths. */
 const SCRUB_STEPS = 50;
+const SCRUB_INSET = 32;   // px from each screen edge where the slider pins at 0 / full range
 let scrub = null;      // {id, sign, step, range, left, width, v, base, a}
 // step size for scrubbing: whole numbers step by 1 (5 / 50 for big amounts),
 // decimals step by their own precision
@@ -588,7 +606,7 @@ function scrubBegin(id, side, x){
   const step = scrubStep(start);
   const r = $('#app').getBoundingClientRect();
   scrub = {id, sign:(start < 0 ? -1 : 1), step, range:step*SCRUB_STEPS,
-           left:r.left, width:r.width, v:0, base:tileValue(a), a};
+           left:r.left + SCRUB_INSET, width:r.width - 2*SCRUB_INSET, v:0, base:tileValue(a), a};
   const d = document.createElement('div');
   d.className = 'scrub'; d.id = 'scrub';
   document.body.appendChild(d);
@@ -761,7 +779,7 @@ function formView(id){
         <button class="${sp?'':'sel'}" onclick="pickSeg(this,'split','0')">Whole tile adds</button>
         <button class="${sp?'sel':''}" onclick="pickSeg(this,'split','1')">Left −, right +</button>
       </div>
-      <div class="hint">Split tiles subtract on the left third and add on the right. Hold the tile on the main screen to change these quickly.</div></div>
+      <div class="hint">Split tiles subtract on the left third and add on the right. Edit → tap the tile on the main screen to change these quickly.</div></div>
     <div><label>Tap on tile adds</label>
       <input type="number" step="any" id="fTap" value="${a?(isFinite(a.tap)?a.tap:1):1}" inputmode="decimal"></div>
     <div id="subWrap" ${sp?'':'hidden'}><label>Left side subtracts</label>
@@ -845,6 +863,7 @@ function addCustom(id){
 }
 function go(name,id){
   closeSheet();
+  editMode = false;
   view = {name, id};
   render();
 }
