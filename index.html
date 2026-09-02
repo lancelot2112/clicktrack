@@ -462,6 +462,13 @@ function tileValue(a){
   return today(a);
 }
 function isSplit(a){ return a.split !== false; }   // split on unless turned off
+function addAmt(a){ return Math.abs(isFinite(a.tap) ? a.tap : 1); }
+function subAmt(a){ return (isFinite(a.sub) && a.sub>0) ? a.sub : addAmt(a); }   // left side; defaults to the add amount
+// blank or invalid subtract field = "same as add"; stored as a positive number
+function parseSub(v, add){
+  const n = Math.abs(parseFloat(v));
+  return (isFinite(n) && n>0 && n!==add) ? n : undefined;
+}
 function tileHTML(a){
   const tap = isFinite(a.tap) ? a.tap : 1;
   const split = isSplit(a);
@@ -475,7 +482,7 @@ function tileHTML(a){
       oncontextmenu="return false">
       <span class="t-name">${esc(a.name)}</span>
       <span class="t-count">${fmt(tileValue(a))}</span>
-      ${split ? `<span class="t-minus">−${fmt(Math.abs(tap))}</span>` : ''}
+      ${split ? `<span class="t-minus">−${fmt(subAmt(a))}</span>` : ''}
       <span class="t-tap">${badge}</span>
     </button>`;
 }
@@ -519,7 +526,7 @@ function tileUp(ev, id){
   if(isSplit(a)){
     const r = ev.currentTarget.getBoundingClientRect();
     const left = (ev.clientX - r.left) < r.width*SPLIT_AT;
-    addAmount(id, left ? -Math.abs(tap) : Math.abs(tap));
+    addAmount(id, left ? -subAmt(a) : addAmt(a));
   }else{
     addAmount(id, tap);
   }
@@ -553,14 +560,19 @@ function openTileSheet(id){
   const sp = isSplit(a);
   openSheet(`
     <h3>${esc(a.name)}</h3>
-    <div><label>Each tap adds</label>
-      <input type="number" step="any" id="sTap" value="${tap}" inputmode="decimal"
-        onkeydown="if(event.key==='Enter')saveTileSheet('${id}')"></div>
     <div><label>Tile</label>
       <div class="seg" id="segSplit" data-split="${sp?'1':'0'}">
         <button class="${sp?'':'sel'}" onclick="pickSeg(this,'split','0')">Whole tile adds</button>
         <button class="${sp?'sel':''}" onclick="pickSeg(this,'split','1')">Left −, right +</button>
       </div></div>
+    <div class="row">
+      <div style="flex:1"><label>Adds</label>
+        <input type="number" step="any" id="sTap" value="${tap}" inputmode="decimal"
+          onkeydown="if(event.key==='Enter')saveTileSheet('${id}')"></div>
+      <div style="flex:1" id="subWrap" ${sp?'':'hidden'}><label>Left subtracts</label>
+        <input type="number" step="any" min="0" id="sSub" value="${subAmt(a)}" inputmode="decimal"
+          onkeydown="if(event.key==='Enter')saveTileSheet('${id}')"></div>
+    </div>
     <div class="row">
       <button class="link tapbtn" onclick="go('detail','${id}')">Details ›</button>
       <button class="done tapbtn" onclick="saveTileSheet('${id}')">Done</button>
@@ -573,6 +585,8 @@ function saveTileSheet(id){
   if(!isFinite(tap) || tap===0) tap = 1;
   a.tap = tap;
   a.split = $('#segSplit').dataset.split === '1';
+  const sub = parseSub($('#sSub').value, Math.abs(tap));
+  if(sub === undefined) delete a.sub; else a.sub = sub;
   closeSheet(); save(); render();
 }
 
@@ -655,15 +669,17 @@ function formView(id){
       <div class="hint">Counters with the same group share a section on the main screen.</div></div>
     <div><label>Unit (optional)</label>
       <input type="text" id="fUnit" value="${a?esc(a.unit||''):''}" placeholder="reps, $, jinxes"></div>
-    <div><label>Tap on tile adds</label>
-      <input type="number" step="any" id="fTap" value="${a?(isFinite(a.tap)?a.tap:1):1}" inputmode="decimal">
-      <div class="hint">Applied when you tap the tile on the main screen. Hold the tile there to change it quickly.</div></div>
     <div><label>Tile</label>
       <div class="seg" id="segSplit" data-split="${sp?'1':'0'}">
         <button class="${sp?'':'sel'}" onclick="pickSeg(this,'split','0')">Whole tile adds</button>
         <button class="${sp?'sel':''}" onclick="pickSeg(this,'split','1')">Left −, right +</button>
       </div>
-      <div class="hint">Split tiles subtract on the left third and add on the right.</div></div>
+      <div class="hint">Split tiles subtract on the left third and add on the right. Hold the tile on the main screen to change these quickly.</div></div>
+    <div><label>Tap on tile adds</label>
+      <input type="number" step="any" id="fTap" value="${a?(isFinite(a.tap)?a.tap:1):1}" inputmode="decimal"></div>
+    <div id="subWrap" ${sp?'':'hidden'}><label>Left side subtracts</label>
+      <input type="number" step="any" min="0" id="fSub" value="${a?subAmt(a):1}" inputmode="decimal">
+      <div class="hint">Use a different amount to dial in coarse one way, fine the other (e.g. +10 / −1).</div></div>
     <div><label>Quick-add buttons</label>
       <input type="text" id="fPresets" value="${a?a.presets.join(', '):'1, 5, 10'}" placeholder="1, 5, 10">
       <div class="hint">Comma-separated amounts. Decimals fine (0.5, 2.5).</div></div>
@@ -692,6 +708,7 @@ function pickSeg(el,key,v){
   el.parentElement.dataset[key] = v;
   el.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('sel'));
   el.classList.add('sel');
+  if(key==='split'){ const w = $('#subWrap'); if(w) w.hidden = (v !== '1'); }
 }
 function parseTimeStr(s){
   s = s.trim();
@@ -716,14 +733,15 @@ function saveForm(id){
   const split = $('#segSplit').dataset.split === '1';
   let tap = parseFloat($('#fTap').value);
   if(!isFinite(tap) || tap===0) tap = 1;
+  const sub = parseSub($('#fSub').value, Math.abs(tap));
   if(id){
     const a = findAcc(id);
-    Object.assign(a,{name,unit,group,color,show,tap,split,presets:presets.length?presets:[1],timers:tmr});
+    Object.assign(a,{name,unit,group,color,show,tap,split,sub,presets:presets.length?presets:[1],timers:tmr});
     delete timers[id]; // pick up new default next open
     view = {name:'detail', id};
   }else{
     const nid = 'a'+Date.now();
-    state.accs.push({id:nid,name,unit,group,color,show,tap,split,presets:presets.length?presets:[1],timers:tmr,lifetime:0,byDay:{}});
+    state.accs.push({id:nid,name,unit,group,color,show,tap,split,sub,presets:presets.length?presets:[1],timers:tmr,lifetime:0,byDay:{}});
     view = {name:'detail', id:nid};
   }
   save(); render();
