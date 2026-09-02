@@ -107,10 +107,13 @@
   /* drag-to-pick-amount readout */
   .scrub{
     position:fixed; top:calc(14px + env(safe-area-inset-top)); left:50%; transform:translateX(-50%);
-    z-index:20; pointer-events:none; min-width:200px; max-width:calc(100% - 32px);
-    background:var(--panel); border-radius:16px; padding:12px 22px; text-align:center;
+    z-index:20; pointer-events:none; width:calc(100% - 28px); max-width:492px;
+    background:var(--panel); border-radius:16px; padding:12px 18px 14px; text-align:center;
     box-shadow:0 8px 24px rgba(20,32,43,.28);
   }
+  .scrub-track{height:8px; background:var(--press); border-radius:4px; margin-top:10px; display:flex;}
+  .scrub-fill{height:100%; border-radius:4px; min-width:0;}
+  .scrub-fill.neg{margin-left:auto;}
   .scrub-val{
     font-size:46px; font-weight:900; line-height:1; letter-spacing:-.02em;
     font-variant-numeric:tabular-nums; font-variation-settings:'wdth' 78;
@@ -551,7 +554,7 @@ function tileMove(ev, id){
   if(scrub){ scrubUpdate(ev.clientX); return; }
   if(!pressInfo || pressInfo.key!=='tile-'+id || pressInfo.long) return;
   const dx = ev.clientX - pressInfo.x, dy = ev.clientY - pressInfo.y;
-  if(Math.abs(dx) > 12 && Math.abs(dx) >= Math.abs(dy)) scrubBegin(id, pressInfo.side, pressInfo.x);
+  if(Math.abs(dx) > 12 && Math.abs(dx) >= Math.abs(dy)) scrubBegin(id, pressInfo.side, ev.clientX);
   else if(Math.abs(dy) > 12) cancelPress();   // vertical = scrolling
 }
 function tileUp(ev, id){
@@ -563,9 +566,12 @@ function tileUp(ev, id){
 }
 function tileCancel(){ scrubEnd(false); cancelPress(); }
 
-/* ---------- scrub: drag left/right to dial in an amount ---------- */
-const SCRUB_PX = 12;   // pixels of drag per step
-let scrub = null;      // {id, start, step, x0, v, base, a}
+/* ---------- scrub: the screen is a slider ----------
+   Adding (started on the right zone): 0 at the left edge, full range at the right edge.
+   Subtracting (started on the left zone): 0 at the right edge, full range at the left edge.
+   Full range is SCRUB_STEPS steps, so 50 for whole-number amounts, 5 for tenths. */
+const SCRUB_STEPS = 50;
+let scrub = null;      // {id, sign, step, range, left, width, v, base, a}
 // step size for scrubbing: whole numbers step by 1 (5 / 50 for big amounts),
 // decimals step by their own precision
 function scrubStep(amt){
@@ -574,28 +580,35 @@ function scrubStep(amt){
   const d = Math.min(2, (String(n).split('.')[1] || '').length);
   return Math.pow(10, -d);
 }
-function scrubBegin(id, side, x0){
+function scrubBegin(id, side, x){
   const a = findAcc(id);
   if(!a) return;
   cancelPress();
   const start = tileTapAmount(a, side);
-  scrub = {id, start, step:scrubStep(start), x0, v:start, base:tileValue(a), a};
+  const step = scrubStep(start);
+  const r = $('#app').getBoundingClientRect();
+  scrub = {id, sign:(start < 0 ? -1 : 1), step, range:step*SCRUB_STEPS,
+           left:r.left, width:r.width, v:0, base:tileValue(a), a};
   const d = document.createElement('div');
   d.className = 'scrub'; d.id = 'scrub';
   document.body.appendChild(d);
   if(navigator.vibrate) navigator.vibrate(8);
-  scrubUpdate(x0);
+  scrubUpdate(x);
 }
 function scrubUpdate(x){
   if(!scrub) return;
-  const n = Math.round((x - scrub.x0) / SCRUB_PX);
-  scrub.v = Math.round((scrub.start + n*scrub.step) * 100) / 100;
-  const v = scrub.v, a = scrub.a;
+  const s = scrub;
+  const raw = s.sign > 0 ? (x - s.left) / s.width : (s.left + s.width - x) / s.width;
+  const f = Math.min(1, Math.max(0, raw));
+  const mag = Math.round(f * s.range / s.step) * s.step;
+  s.v = Math.round(s.sign * mag * 100) / 100;
+  const v = s.v, a = s.a;
   const sign = v > 0 ? '+' : v < 0 ? '−' : '';
   const el = $('#scrub');
   if(el) el.innerHTML = `
     <div class="scrub-val" style="color:${a.color}">${sign}${fmt(Math.abs(v))}</div>
-    <div class="scrub-sub">${esc(a.name)} · ${fmt(scrub.base)} → ${fmt(scrub.base + v)} · release to apply</div>`;
+    <div class="scrub-sub">${esc(a.name)} · ${fmt(s.base)} → ${fmt(s.base + v)} · release to apply</div>
+    <div class="scrub-track"><div class="scrub-fill ${s.sign < 0 ? 'neg' : ''}" style="width:${(Math.abs(v)/s.range*100).toFixed(1)}%; background:${a.color}"></div></div>`;
 }
 function scrubEnd(apply){
   if(!scrub) return;
