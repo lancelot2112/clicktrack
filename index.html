@@ -64,11 +64,30 @@
     font-weight:700; font-size:14px; padding:8px 14px; border-radius:999px;
   }
   .editbtn.on{background:var(--c1); border-color:var(--c1); color:#fff;}
-  /* edit mode: tiles get a dashed ring and a gentle pulse */
-  .board.editing .tile{outline:2px dashed rgba(255,255,255,.8); outline-offset:-5px; animation:editpulse 1.2s ease-in-out infinite;}
+  /* edit mode: tiles jiggle, get an × badge, and can be dragged to reorder */
+  .board.editing .tile{outline:2px dashed rgba(255,255,255,.8); outline-offset:-5px; animation:editpulse 1.2s ease-in-out infinite; touch-action:none;}
   @keyframes editpulse{50%{transform:scale(.97);}}
+  .tile .t-del{
+    display:none; position:absolute; top:-7px; left:-7px; width:24px; height:24px; z-index:2;
+    border-radius:50%; background:var(--ink); color:#fff; font-size:15px; font-weight:900;
+    line-height:24px; text-align:center; box-shadow:0 1px 4px rgba(0,0,0,.35);
+  }
+  .board.editing .t-del{display:block;}
+  .board.editing .t-name{padding-left:12px;}
+  .tile.placeholder{opacity:.3; animation:none;}
+  .tile.ghost{
+    position:fixed; z-index:30; margin:0; pointer-events:none; animation:none; outline:none;
+    transform:scale(1.08); box-shadow:0 14px 30px rgba(0,0,0,.35);
+  }
   .board{flex:1; padding:4px 14px 20px;}
-  .group-h{margin:18px 4px 8px; font-size:14px; font-weight:800; color:var(--ink-soft);}
+  .group-h{margin:18px 4px 8px; font-size:14px; font-weight:800; color:var(--ink-soft); display:flex; align-items:center; gap:4px;}
+  .group-h span{flex:1;}
+  .g-btn{
+    display:none; width:34px; height:30px; border-radius:8px; font-size:13px; font-weight:800;
+    background:var(--panel); border:2px solid var(--line); color:var(--ink-soft);
+  }
+  .g-btn:disabled{opacity:.3;}
+  .board.editing .g-btn{display:inline-block;}
   .tiles{display:grid; grid-template-columns:repeat(auto-fill,minmax(78px,1fr)); gap:7px;}
   .tile{
     position:relative; display:flex; flex-direction:column; align-items:flex-start; gap:0; text-align:left;
@@ -524,17 +543,30 @@ function render(){
   }
 }
 
+function groupOf(a){ return (a.group||'').trim() || 'Other'; }
+// groups in the user's saved order first, then any new ones alphabetically (Other last)
+function groupNames(){
+  const present = [...new Set(state.accs.map(groupOf))];
+  const order = (state.groupOrder||[]).filter(g=>present.includes(g));
+  const rest = present.filter(g=>!order.includes(g)).sort((x,y)=>(x==='Other')-(y==='Other') || x.localeCompare(y));
+  return [...order, ...rest];
+}
+function moveGroup(i, dir){
+  const names = groupNames(), j = i + dir;
+  if(j < 0 || j >= names.length) return;
+  [names[i], names[j]] = [names[j], names[i]];
+  state.groupOrder = names;
+  save(); render();
+}
 function homeView(){
   const groups = {};
-  state.accs.forEach(a=>{
-    const g = (a.group||'').trim() || 'Other';
-    (groups[g] = groups[g] || []).push(a);
-  });
-  const names = Object.keys(groups).sort((x,y)=>
-    (x==='Other')-(y==='Other') || x.localeCompare(y));
-  const sections = names.map(g=>`
-    ${(names.length>1 || g!=='Other') ? `<div class="group-h">${esc(g)}</div>` : ''}
-    <div class="tiles">${groups[g].map(tileHTML).join('')}</div>`).join('');
+  state.accs.forEach(a=>{ (groups[groupOf(a)] = groups[groupOf(a)] || []).push(a); });
+  const names = groupNames();
+  const sections = names.map((g,i)=>`
+    ${(names.length>1 || g!=='Other') ? `<div class="group-h" data-group="${esc(g)}"><span>${esc(g)}</span>
+      <button class="g-btn tapbtn" onclick="moveGroup(${i},-1)" ${i===0?'disabled':''}>▲</button>
+      <button class="g-btn tapbtn" onclick="moveGroup(${i},1)" ${i===names.length-1?'disabled':''}>▼</button></div>` : ''}
+    <div class="tiles" data-group="${esc(g)}">${groups[g].map(tileHTML).join('')}</div>`).join('');
   const last = lastAdd && findAcc(lastAdd.accId);
   return `
     <header class="home">
@@ -545,10 +577,10 @@ function homeView(){
           <button class="newbtn2 tapbtn" onclick="go('counter',null)">+ New</button>
         </div>
       </div>
-      <p>${editMode ? 'Tap a tile to edit it.' : 'Tap to count · drag for any amount · hold a timer to edit it'}</p>
+      <p>${editMode ? 'Tap a tile to edit it · drag to reorder or regroup · × to delete' : 'Tap to count · drag for any amount · hold a timer to edit it'}</p>
     </header>
     ${warnbar()}
-    <div class="board ${editMode?'editing':''}">
+    <div class="board ${editMode?'editing':''}" onpointermove="boardMove(event)" onpointerup="boardUp(event)" onpointercancel="boardCancel()">
       ${state.accs.length ? sections : `<div class="empty">Nothing here yet.<br>Count reps, miles or jinxes, or track a number like your weight.</div>`}
       ${last && !editMode ? `<button class="undo tapbtn" onclick="undo()">${undoLabel()}</button>` : ''}
     </div>
@@ -568,11 +600,13 @@ function tileHTML(a){
   if(isRatio(a)){
     const n = findAcc(a.num), d = findAcc(a.den);
     return `
-    <button class="tile tapbtn ratio" id="tile-${a.id}" style="--tile-c:${a.color}"
+    <button class="tile tapbtn ratio" id="tile-${a.id}" data-id="${a.id}" style="--tile-c:${a.color}"
       onpointerdown="tileDown(event,'${a.id}')"
+      onpointermove="tileMove(event,'${a.id}')"
       onpointerup="tileUp(event,'${a.id}')"
       onpointercancel="tileCancel()"
       oncontextmenu="return false">
+      <span class="t-del">×</span>
       <span class="t-name">${esc(a.name)}</span>
       <span class="t-count">${fmtRatio(tileValue(a))}</span>
       <span class="t-sub">${n && d ? esc(n.name)+' ÷ '+esc(d.name) : 'pick two counters'}</span>
@@ -582,12 +616,13 @@ function tileHTML(a){
   const split = isSplit(a);
   const badge = (split || tap>0 ? '+' : '−') + fmt(Math.abs(tap));
   return `
-    <button class="tile tapbtn ${split?'split':''} ${isLevel(a)?'level':''}" id="tile-${a.id}" style="--tile-c:${a.color}"
+    <button class="tile tapbtn ${split?'split':''} ${isLevel(a)?'level':''}" id="tile-${a.id}" data-id="${a.id}" style="--tile-c:${a.color}"
       onpointerdown="tileDown(event,'${a.id}')"
       onpointermove="tileMove(event,'${a.id}')"
       onpointerup="tileUp(event,'${a.id}')"
       onpointercancel="tileCancel()"
       oncontextmenu="return false">
+      <span class="t-del">×</span>
       <span class="t-name">${esc(a.name)}</span>
       <span class="t-count">${fmt(tileValue(a))}</span>
       ${isLevel(a) ? `<span class="t-sub">${levelDelta(a)}</span>` : ''}
@@ -641,31 +676,108 @@ function toggleEdit(){ editMode = !editMode; render(); }
 function tileDown(ev, id){
   const a = findAcc(id);
   if(!a) return;
-  if(isRatio(a) && !editMode) return;   // computed tile: nothing to tap
+  if(editMode){ editDown(ev, id); return; }
+  if(isRatio(a)) return;   // computed tile: nothing to tap
   try{ ev.currentTarget.setPointerCapture(ev.pointerId); }catch(e){}
   pressDown(ev, 'tile-'+id, null);
   pressInfo.side = tileSide(ev, a);
-  pressInfo.edit = editMode;
 }
 function tileMove(ev, id){
+  if(drag){ boardMove(ev); return; }
   if(scrub){ scrubUpdate(ev.clientX); return; }
-  if(!pressInfo || pressInfo.key!=='tile-'+id || pressInfo.edit) return;
+  if(!pressInfo || pressInfo.key!=='tile-'+id) return;
   const dx = ev.clientX - pressInfo.x, dy = ev.clientY - pressInfo.y;
   if(Math.abs(dx) > 12 && Math.abs(dx) >= Math.abs(dy)) scrubBegin(id, pressInfo.side, ev.clientX);
   else if(Math.abs(dy) > 12) cancelPress();   // vertical = scrolling
 }
 function tileUp(ev, id){
+  if(drag){ boardUp(ev); return; }
   if(scrub){ scrubEnd(true); return; }
-  const edit = pressInfo && pressInfo.edit;
   if(!pressUp('tile-'+id)) return;
   const a = findAcc(id);
   if(!a) return;
-  if(edit){ go('counter', id); return; }
   const amt = tileTapAmount(a, tileSide(ev, a));
   if(isLevel(a)) setLevel(id, levelCurrent(a) + amt);
   else addAmount(id, amt);
 }
-function tileCancel(){ scrubEnd(false); cancelPress(); }
+function tileCancel(){ boardCancel(); scrubEnd(false); cancelPress(); }
+
+/* ---------- edit mode: tap opens the page, × deletes, drag reorders / regroups ----------
+   The board captures the pointer so the dragged tile can be moved around in the DOM
+   (moving a captured element would drop the capture). */
+let drag = null;   // {id, el, ghost, x0, y0, started, del}
+function editDown(ev, id){
+  const board = $('.board');
+  try{ board.setPointerCapture(ev.pointerId); }catch(e){}
+  drag = {id, el:ev.currentTarget, x0:ev.clientX, y0:ev.clientY, started:false,
+          del:!!(ev.target.closest && ev.target.closest('.t-del'))};
+}
+function startDrag(){
+  const el = drag.el, r = el.getBoundingClientRect();
+  const g = el.cloneNode(true);
+  g.classList.add('ghost'); g.classList.remove('placeholder');
+  g.style.left = r.left+'px'; g.style.top = r.top+'px'; g.style.width = r.width+'px'; g.style.height = r.height+'px';
+  document.body.appendChild(g);
+  el.classList.add('placeholder');
+  drag.ghost = g; drag.started = true;
+  if(navigator.vibrate) navigator.vibrate(10);
+}
+function boardMove(ev){
+  if(!drag) return;
+  const dx = ev.clientX - drag.x0, dy = ev.clientY - drag.y0;
+  if(!drag.started){
+    if(drag.del || Math.hypot(dx, dy) < 8) return;
+    startDrag();
+  }
+  drag.ghost.style.transform = `translate(${dx}px,${dy}px) scale(1.08)`;
+  // keep the board scrolling when dragging near the top or bottom of the screen
+  if(ev.clientY < 80) window.scrollBy(0, -8);
+  else if(ev.clientY > window.innerHeight - 100) window.scrollBy(0, 8);
+  const under = document.elementFromPoint(ev.clientX, ev.clientY);
+  if(!under) return;
+  const el = drag.el;
+  const t = under.closest('.tile');
+  if(t && t !== el){
+    const r = t.getBoundingClientRect();
+    const before = ev.clientX < r.left + r.width/2;
+    t.parentNode.insertBefore(el, before ? t : t.nextSibling);
+    return;
+  }
+  const h = under.closest('.group-h');
+  const c = h ? h.nextElementSibling : under.closest('.tiles');
+  if(c && c.classList.contains('tiles') && el !== c.lastElementChild) c.appendChild(el);
+}
+// read the new order (and group) straight from the DOM
+function commitOrder(movedId){
+  const order = [];
+  document.querySelectorAll('.tiles[data-group]').forEach(c=>{
+    const g = c.dataset.group === 'Other' ? '' : c.dataset.group;
+    c.querySelectorAll('.tile[data-id]').forEach(t=>{
+      const a = findAcc(t.dataset.id);
+      if(!a || order.includes(a)) return;
+      if(a.id === movedId) a.group = g;
+      order.push(a);
+    });
+  });
+  state.accs.forEach(a=>{ if(!order.includes(a)) order.push(a); });
+  state.accs = order;
+}
+function boardUp(ev){
+  if(!drag) return;
+  const d = drag; drag = null;
+  if(d.started){
+    d.ghost.remove(); d.el.classList.remove('placeholder');
+    commitOrder(d.id); save(); render();
+    return;
+  }
+  if(d.del){ delAcc(d.id); return; }
+  go('counter', d.id);
+}
+function boardCancel(){
+  if(!drag) return;
+  const d = drag; drag = null;
+  if(d.started){ d.ghost.remove(); render(); }
+}
 
 /* ---------- scrub: the screen is a slider ----------
    One number line across the screen: 0 in the middle, −range at the left edge,
@@ -914,7 +1026,8 @@ function delAcc(id){
   if(!confirm('Delete this counter and all its history?')) return;
   state.accs = state.accs.filter(a=>a.id!==id);
   if(lastAdd && lastAdd.accId===id) lastAdd = null;
-  save(); go('home');
+  save();
+  if(view.name==='home') render(); else go('home');
 }
 function go(name,id){
   closeSheet();
