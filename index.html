@@ -229,6 +229,10 @@
   }
   .form .danger{color:var(--c1); font-weight:700; padding:12px; font-size:14px;}
   .hint{font-size:12px; color:var(--ink-soft); margin-top:4px;}
+  .hint.ok{color:var(--c2);} .hint.bad{color:var(--c1);}
+  .mini{display:flex; gap:8px; margin-top:8px;}
+  .mini>div{flex:1; min-width:0;}
+  .mini label{font-size:11px; margin-bottom:4px;}
 
   /* ---------- sheet (hold a timer button) ---------- */
   .backdrop{
@@ -382,14 +386,79 @@ function levelStat(a, key){
   if(key==='avg30') return levelAvg(a, 30);
   return levelCurrent(a);
 }
+/* ---------- units ----------
+   A small built-in table. A counter's unit is free text; it's matched to the
+   table by alias, or the user picks a match from a dropdown. Unknown units act
+   as labels: they only convert to themselves. */
+const UNITS = [
+  {id:'mi',  dim:'distance', f:1609.344,  name:'miles',        al:['mi','mile','miles']},
+  {id:'km',  dim:'distance', f:1000,      name:'kilometers',   al:['km','kms','k','kilometer','kilometers','kilometre','kilometres']},
+  {id:'m',   dim:'distance', f:1,         name:'meters',       al:['m','meter','meters','metre','metres']},
+  {id:'ft',  dim:'distance', f:0.3048,    name:'feet',         al:['ft','foot','feet']},
+  {id:'yd',  dim:'distance', f:0.9144,    name:'yards',        al:['yd','yds','yard','yards']},
+  {id:'s',   dim:'time',     f:1,         name:'seconds',      al:['s','sec','secs','second','seconds']},
+  {id:'min', dim:'time',     f:60,        name:'minutes',      al:['min','mins','minute','minutes']},
+  {id:'h',   dim:'time',     f:3600,      name:'hours',        al:['h','hr','hrs','hour','hours']},
+  {id:'day', dim:'time',     f:86400,     name:'days',         al:['d','day','days']},
+  {id:'lb',  dim:'mass',     f:0.45359237,name:'pounds',       al:['lb','lbs','pound','pounds']},
+  {id:'kg',  dim:'mass',     f:1,         name:'kilograms',    al:['kg','kgs','kilo','kilos','kilogram','kilograms']},
+  {id:'g',   dim:'mass',     f:0.001,     name:'grams',        al:['g','gram','grams']},
+  {id:'oz',  dim:'mass',     f:0.028349523125, name:'ounces',  al:['oz','ounce','ounces']},
+  {id:'L',   dim:'volume',   f:1,         name:'liters',       al:['l','liter','liters','litre','litres']},
+  {id:'mL',  dim:'volume',   f:0.001,     name:'milliliters',  al:['ml','milliliter','milliliters','millilitre','millilitres']},
+  {id:'floz',dim:'volume',   f:0.0295735, name:'fluid ounces', al:['floz','fl.oz','fluidounce','fluidounces']},
+  {id:'cup', dim:'volume',   f:0.2365882, name:'cups',         al:['cup','cups']},
+  {id:'gal', dim:'volume',   f:3.78541,   name:'gallons',      al:['gal','gals','gallon','gallons']},
+];
+const COMPOUND = {mph:['mi','h'], kph:['km','h'], kmh:['km','h'], mps:['m','s'], fps:['ft','s']};
+const DIM_NAME = {distance:'distance', time:'time', mass:'weight', volume:'volume'};
+const normU = t => String(t||'').toLowerCase().replace(/[\s.]/g,'');
+function unitById(id){ return UNITS.find(u=>u.id===id) || null; }
+function matchUnit(text){ const n = normU(text); return n ? (UNITS.find(u=>u.al.includes(n)) || null) : null; }
+function labelUnit(text){ const n = normU(text); return n ? {id:n, dim:null, f:1, name:String(text).trim()} : null; }
+// what a counter's unit means: a table entry (matched or chosen), else a label-only unit
+function unitOf(a){
+  if(!a) return null;
+  return (a.unitId && unitById(a.unitId)) || matchUnit(a.unit) || labelUnit(a.unit);
+}
+// "mph", "km/h", "min/mi", "reps/h" → [numUnit, denUnit], label-only sides allowed; null if not a pair
+function parseCompound(text){
+  const n = normU(text);
+  if(!n) return null;
+  if(COMPOUND[n]) return COMPOUND[n].map(unitById);
+  const parts = n.split('/');
+  if(parts.length !== 2 || !parts[0] || !parts[1]) return null;
+  return parts.map(x => matchUnit(x) || labelUnit(x));
+}
+function sameDim(a, b){ return !!(a && b && (a.dim ? a.dim === b.dim : (b.dim === null && a.id === b.id))); }
+function unitOptions(sel, dim){   // <option>s for a unit dropdown, optionally limited to one dimension
+  return UNITS.filter(u=>!dim || u.dim===dim).map(u=>`<option value="${u.id}" ${u.id===sel?'selected':''}>${u.name} (${u.id})</option>`).join('');
+}
 function isRatio(a){ return a.kind === 'ratio'; }
+// how a ratio gets from its sources' units to the unit it should show:
+//   {k: factor (NaN = incompatible), auto: derived from units?, msg: explanation}
+function ratioConv(a){
+  const n = findAcc(a.num), d = findAcc(a.den);
+  const un = unitOf(n), ud = unitOf(d);
+  const manual = (isFinite(a.scale) && a.scale !== 0) ? a.scale : 1;
+  const chosen = (a.showNum || a.showDen) ? [a.showNum ? unitById(a.showNum) : null, a.showDen ? unitById(a.showDen) : null] : null;
+  const t = chosen || parseCompound(a.unit);
+  if(!t || (!t[0] && !t[1])){
+    return {k:manual, auto:false, msg: normU(a.unit) ? `"${a.unit}" isn't a unit I know. Pick what it means, or multiply by hand.` : 'Type a unit like mph, km/h or min/mi, or multiply by hand.'};
+  }
+  if(!un || !ud) return {k:manual, auto:false, msg:'Give both source counters a unit to convert automatically.'};
+  const tn = t[0] || un, td = t[1] || ud;   // a missing side keeps the source unit
+  if(!sameDim(un, tn)) return {k:NaN, auto:true, msg:`${n.name} is in ${un.name}, which can't become ${tn.name}.`};
+  if(!sameDim(ud, td)) return {k:NaN, auto:true, msg:`${d.name} is in ${ud.name}, which can't become ${td.name}.`};
+  const k = (un.f / ud.f) / (tn.f / td.f);
+  return {k, auto:true, msg:`${un.id}/${ud.id} → ${tn.id}/${td.id}, ×${fmt(k)}`, tn, td};
+}
 // ratio counters divide two tallies over the same period (miles ÷ hours = speed)
 function ratioValue(a, p){
   const n = findAcc(a.num), d = findAcc(a.den);
   if(!n || !d) return NaN;
   const dv = periodValue(d, p);
-  const k = (isFinite(a.scale) && a.scale !== 0) ? a.scale : 1;
-  return dv ? periodValue(n, p) / dv * k : NaN;
+  return dv ? periodValue(n, p) / dv * ratioConv(a).k : NaN;
 }
 function fmtRatio(v){ return isFinite(v) ? fmt(v) : '—'; }
 function tallies(){ return state.accs.filter(a=>(a.kind||'tally')==='tally'); }
@@ -537,7 +606,7 @@ function timerBarHTML(id, presets){
 function render(){
   const app = $('#app');
   if(view.name==='home') app.innerHTML = homeView();
-  else if(view.name==='counter') app.innerHTML = counterView(view.id);
+  else if(view.name==='counter'){ app.innerHTML = counterView(view.id); unitHint(); ratioHint(); }
   if(view.name==='home'){
     tstate('_home', homeTimers()[0]);
     updateTimerUI('_home');
@@ -610,7 +679,8 @@ function tileHTML(a){
       <span class="t-del">×</span>
       <span class="t-name">${esc(a.name)}</span>
       <span class="t-count">${fmtRatio(tileValue(a))}</span>
-      <span class="t-sub">${n && d ? esc(n.name)+' ÷ '+esc(d.name)+(isFinite(a.scale)&&a.scale!==1&&a.scale!==0?' ×'+fmt(a.scale):'') : 'pick two counters'}</span>
+      <span class="t-sub">${!(n && d) ? 'pick two counters' : (()=>{ const c = ratioConv(a);
+        return esc(n.name)+' ÷ '+esc(d.name) + (!isFinite(c.k) ? ' · unit mismatch' : c.auto && a.unit ? ' → '+esc(a.unit) : c.k!==1 ? ' ×'+fmt(c.k) : ''); })()}</span>
     </button>`;
   }
   const tap = isFinite(a.tap) ? a.tap : 1;
@@ -933,18 +1003,23 @@ function counterView(id){
         <datalist id="groupList">
           ${[...new Set(state.accs.map(x=>(x.group||'').trim()).filter(Boolean))].map(g=>`<option value="${esc(g)}">`).join('')}
         </datalist></div>
-      <div><label>Unit</label>
-        <input type="text" id="fUnit" value="${a?esc(a.unit||''):''}" placeholder="reps, mi, $"></div>
+      ${rat ? '' : `<div><label>Unit</label>
+        <input type="text" id="fUnit" list="unitList" value="${a?esc(a.unit||''):''}" placeholder="reps, mi, lb" oninput="unitHint()"></div>`}
     </div>
+    <datalist id="unitList">
+      ${UNITS.map(u=>`<option value="${u.id}">${u.name}</option>`).join('')}
+      ${rat ? Object.keys(COMPOUND).map(c=>`<option value="${c}">`).join('') + '<option value="km/h"><option value="min/mi"><option value="min/km">' : ''}
+    </datalist>
+    ${rat ? '' : `<div id="unitHint" data-match="${a&&a.unitId?a.unitId:''}"></div>`}
     ${rat ? `
     <div class="row">
-      <div><label>Divide</label><select id="fNum">${pickOpts(a&&a.num)}</select></div>
-      <div><label>by</label><select id="fDen">${pickOpts(a&&a.den)}</select></div>
+      <div><label>Divide</label><select id="fNum" onchange="ratioHint()">${pickOpts(a&&a.num)}</select></div>
+      <div><label>by</label><select id="fDen" onchange="ratioHint()">${pickOpts(a&&a.den)}</select></div>
     </div>
     ${tallies().length < 2 ? `<div class="hint">You need two tally counters first.</div>` : ''}
-    <div><label>Multiply by</label>
-      <input type="number" step="any" id="fScale" value="${a&&isFinite(a.scale)?a.scale:1}" inputmode="decimal">
-      <div class="hint">Unit conversion, e.g. 60 turns miles ÷ minutes into mph. Leave at 1 for none.</div></div>` : ''}
+    <div><label>Show as (unit)</label>
+      <input type="text" id="fUnit" list="unitList" value="${a?esc(a.unit||''):''}" placeholder="mph, km/h, min/mi" oninput="ratioHint()">
+      <div id="ratioHint" data-num="${a&&a.showNum?a.showNum:''}" data-den="${a&&a.showDen?a.showDen:''}" data-scale="${a&&isFinite(a.scale)?a.scale:1}"></div></div>` : ''}
     ${lvl ? `
     <div><label>${a?'Current value':'Starting value'}</label>
       <input type="number" step="any" id="fVal" value="${a?levelCurrent(a):''}" inputmode="decimal" placeholder="e.g. 180"></div>` : ''}
@@ -973,6 +1048,57 @@ function counterView(id){
 
 /* ---------- form actions ---------- */
 function setNewKind(k){ view.kind = k; render(); }
+// tally / measurement: say what the typed unit matched, or offer a dropdown
+function unitHint(){
+  const box = $('#unitHint'), inp = $('#fUnit');
+  if(!box || !inp) return;
+  const sel = $('#fUnitMatch');
+  if(sel) box.dataset.match = sel.value;   // remember the dropdown choice across re-renders
+  const text = inp.value.trim(), m = matchUnit(text);
+  if(!text){ box.innerHTML = ''; return; }
+  if(m){ box.innerHTML = `<div class="hint ok">✓ ${m.name} (${DIM_NAME[m.dim]})</div>`; return; }
+  box.innerHTML = `
+    <div class="hint">Not a unit I know. Treat "${esc(text)}" as:</div>
+    <select id="fUnitMatch" style="margin-top:6px" onchange="unitHint()">
+      <option value="">just a label (no conversion)</option>
+      ${unitOptions(box.dataset.match)}
+    </select>`;
+}
+// ratio: show the conversion the typed unit implies, or offer dropdowns + manual factor
+function ratioHint(){
+  const box = $('#ratioHint');
+  if(!box) return;
+  const sn = $('#fShowNum'), sd = $('#fShowDen'), sc = $('#fScale');
+  if(sn) box.dataset.num = sn.value;
+  if(sd) box.dataset.den = sd.value;
+  if(sc) box.dataset.scale = sc.value;
+  const tmp = ratioFromForm();
+  const parsed = parseCompound(tmp.unit);
+  const c = ratioConv(tmp);
+  if(parsed){ box.innerHTML = `<div class="hint ${isFinite(c.k)?'ok':'bad'}">${isFinite(c.k)?'✓ ':'✗ '}${c.msg}</div>`; return; }
+  const n = findAcc(tmp.num), d = findAcc(tmp.den);
+  const un = unitOf(n), ud = unitOf(d);
+  box.innerHTML = `
+    <div class="hint ${c.auto?(isFinite(c.k)?'ok':'bad'):''}">${c.auto?(isFinite(c.k)?'✓ ':'✗ '):''}${c.msg}</div>
+    <div class="mini">
+      <div><label>${n?esc(n.name):'Top'} shown in</label>
+        <select id="fShowNum" onchange="ratioHint()"><option value="">${un?esc(un.name):'as is'}</option>${unitOptions(box.dataset.num, un&&un.dim)}</select></div>
+      <div><label>${d?esc(d.name):'Bottom'} shown in</label>
+        <select id="fShowDen" onchange="ratioHint()"><option value="">${ud?esc(ud.name):'as is'}</option>${unitOptions(box.dataset.den, ud&&ud.dim)}</select></div>
+    </div>
+    ${!(box.dataset.num || box.dataset.den) ? `
+    <div class="mini"><div><label>or multiply by</label>
+      <input type="number" step="any" id="fScale" value="${box.dataset.scale||1}" inputmode="decimal" oninput="ratioHint()"></div></div>` : ''}`;
+}
+// the ratio the form currently describes (used for live hints and saving)
+function ratioFromForm(){
+  const box = $('#ratioHint') || {dataset:{}};
+  const parsed = parseCompound($('#fUnit').value);
+  const scale = parseFloat(box.dataset.scale);
+  return {kind:'ratio', num:$('#fNum').value, den:$('#fDen').value, unit:$('#fUnit').value.trim(),
+          showNum: parsed ? '' : (box.dataset.num || ''), showDen: parsed ? '' : (box.dataset.den || ''),
+          scale: (isFinite(scale) && scale !== 0) ? scale : 1};
+}
 function pickColor(el,c){
   el.parentElement.dataset.color = c;
   el.parentElement.querySelectorAll('.swatch').forEach(s=>s.classList.remove('sel'));
@@ -1006,24 +1132,25 @@ function saveForm(id){
   if(!isFinite(tap) || tap===0) tap = 1;
   let sub = subEl ? Math.abs(parseFloat(subEl.value)) : 0;
   if(!isFinite(sub)) sub = 0;
-  let num, den, scale = 1;
+  let ratio = null, unitId;
   if(kind==='ratio'){
-    num = $('#fNum').value; den = $('#fDen').value;
-    if(!num || !den || num===den){ $('#fDen').focus(); return; }
-    scale = parseFloat($('#fScale').value);
-    if(!isFinite(scale) || scale === 0) scale = 1;
+    ratio = ratioFromForm();
+    if(!ratio.num || !ratio.den || ratio.num===ratio.den){ $('#fDen').focus(); return; }
+  }else{
+    const m = matchUnit(unit), box = $('#unitHint');
+    unitId = m ? m.id : ((box && box.dataset.match) || undefined);
   }
   const valEl = $('#fVal');
   const val = valEl ? parseFloat(valEl.value) : NaN;
   if(id){
     const a = findAcc(id);
-    Object.assign(a,{name,unit,group,color,show,tap,sub});
-    if(kind==='ratio') Object.assign(a,{num,den,scale});
+    Object.assign(a,{name,unit,group,color,show,tap,sub,unitId});
+    if(kind==='ratio') Object.assign(a,{num:ratio.num,den:ratio.den,unit:ratio.unit,showNum:ratio.showNum,showDen:ratio.showDen,scale:ratio.scale});
     if(kind==='level' && isFinite(val) && val !== levelCurrent(a)) setLevel(id, val);
   }else{
-    const acc = {id:'a'+Date.now(),kind,name,unit,group,color,show,tap,sub,lifetime:0,byDay:{}};
+    const acc = {id:'a'+Date.now(),kind,name,unit,group,color,show,tap,sub,unitId,lifetime:0,byDay:{}};
     if(kind==='level') acc.byDay[dayKey()] = isFinite(val) ? Math.round(val*100)/100 : 0;
-    if(kind==='ratio') Object.assign(acc,{num,den,scale});
+    if(kind==='ratio') Object.assign(acc,{num:ratio.num,den:ratio.den,showNum:ratio.showNum,showDen:ratio.showDen,scale:ratio.scale});
     state.accs.push(acc);
   }
   save(); go('home');
