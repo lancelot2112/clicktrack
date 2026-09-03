@@ -388,7 +388,8 @@ function ratioValue(a, p){
   const n = findAcc(a.num), d = findAcc(a.den);
   if(!n || !d) return NaN;
   const dv = periodValue(d, p);
-  return dv ? periodValue(n, p) / dv : NaN;
+  const k = (isFinite(a.scale) && a.scale !== 0) ? a.scale : 1;
+  return dv ? periodValue(n, p) / dv * k : NaN;
 }
 function fmtRatio(v){ return isFinite(v) ? fmt(v) : '—'; }
 function tallies(){ return state.accs.filter(a=>(a.kind||'tally')==='tally'); }
@@ -609,7 +610,7 @@ function tileHTML(a){
       <span class="t-del">×</span>
       <span class="t-name">${esc(a.name)}</span>
       <span class="t-count">${fmtRatio(tileValue(a))}</span>
-      <span class="t-sub">${n && d ? esc(n.name)+' ÷ '+esc(d.name) : 'pick two counters'}</span>
+      <span class="t-sub">${n && d ? esc(n.name)+' ÷ '+esc(d.name)+(isFinite(a.scale)&&a.scale!==1&&a.scale!==0?' ×'+fmt(a.scale):'') : 'pick two counters'}</span>
     </button>`;
   }
   const tap = isFinite(a.tap) ? a.tap : 1;
@@ -940,7 +941,10 @@ function counterView(id){
       <div><label>Divide</label><select id="fNum">${pickOpts(a&&a.num)}</select></div>
       <div><label>by</label><select id="fDen">${pickOpts(a&&a.den)}</select></div>
     </div>
-    ${tallies().length < 2 ? `<div class="hint">You need two tally counters first.</div>` : ''}` : ''}
+    ${tallies().length < 2 ? `<div class="hint">You need two tally counters first.</div>` : ''}
+    <div><label>Multiply by</label>
+      <input type="number" step="any" id="fScale" value="${a&&isFinite(a.scale)?a.scale:1}" inputmode="decimal">
+      <div class="hint">Unit conversion, e.g. 60 turns miles ÷ minutes into mph. Leave at 1 for none.</div></div>` : ''}
     ${lvl ? `
     <div><label>${a?'Current value':'Starting value'}</label>
       <input type="number" step="any" id="fVal" value="${a?levelCurrent(a):''}" inputmode="decimal" placeholder="e.g. 180"></div>` : ''}
@@ -1002,22 +1006,24 @@ function saveForm(id){
   if(!isFinite(tap) || tap===0) tap = 1;
   let sub = subEl ? Math.abs(parseFloat(subEl.value)) : 0;
   if(!isFinite(sub)) sub = 0;
-  let num, den;
+  let num, den, scale = 1;
   if(kind==='ratio'){
     num = $('#fNum').value; den = $('#fDen').value;
     if(!num || !den || num===den){ $('#fDen').focus(); return; }
+    scale = parseFloat($('#fScale').value);
+    if(!isFinite(scale) || scale === 0) scale = 1;
   }
   const valEl = $('#fVal');
   const val = valEl ? parseFloat(valEl.value) : NaN;
   if(id){
     const a = findAcc(id);
     Object.assign(a,{name,unit,group,color,show,tap,sub});
-    if(kind==='ratio') Object.assign(a,{num,den});
+    if(kind==='ratio') Object.assign(a,{num,den,scale});
     if(kind==='level' && isFinite(val) && val !== levelCurrent(a)) setLevel(id, val);
   }else{
     const acc = {id:'a'+Date.now(),kind,name,unit,group,color,show,tap,sub,lifetime:0,byDay:{}};
     if(kind==='level') acc.byDay[dayKey()] = isFinite(val) ? Math.round(val*100)/100 : 0;
-    if(kind==='ratio') Object.assign(acc,{num,den});
+    if(kind==='ratio') Object.assign(acc,{num,den,scale});
     state.accs.push(acc);
   }
   save(); go('home');
