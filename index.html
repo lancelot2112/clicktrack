@@ -112,6 +112,10 @@
   .tile:active{
     box-shadow: inset 0 2px 6px rgba(0,0,0,.28), 0 1px 3px rgba(0,0,0,.15);
   }
+  /* vertical dot column on the right edge: which of the flick-up/down views is on */
+  .tile .t-dots{position:absolute; top:27px; right:7px; display:flex; flex-direction:column; gap:3px;}
+  .tile .t-dots i{display:block; width:4px; height:4px; border-radius:50%; background:rgba(255,255,255,.38);}
+  .tile .t-dots i.on{background:#fff; box-shadow:0 0 2px rgba(0,0,0,.3);}
   .tile .t-name{
     font-size:10.5px; font-weight:700; width:100%; overflow:hidden;
     text-overflow:ellipsis; white-space:nowrap; opacity:.95;
@@ -474,17 +478,20 @@ function tileValue(a){
   return periodValue(a, a.show);
 }
 // what the tile is showing, for its unit line ('' for the default: today / now)
-function periodLabel(a){
-  if(isLevel(a)){ const k = levelKey(a); return k==='now' ? '' : LEVEL_STATS.find(([x])=>x===k)[1].toLowerCase(); }
-  const p = PERIODS.find(([x])=>x===a.show);
-  return (!p || p[0]==='today') ? '' : p[1].toLowerCase();
+const SHORT_LABEL = {week:'wk', month:'mo', all:'all', change:'Δ', avg7:'7d avg', avg30:'30d avg'};
+function showKeys(a){ return (isLevel(a) ? LEVEL_STATS : PERIODS).map(([k])=>k); }
+function showKey(a){ return isLevel(a) ? levelKey(a) : (PERIODS.some(([k])=>k===a.show) ? a.show : 'today'); }
+function periodLabel(a){ return SHORT_LABEL[showKey(a)] || ''; }
+// four dots in the tile corner: which of the flick-able views is on
+function dotsHTML(a){
+  const cur = showKey(a);
+  return `<span class="t-dots">${showKeys(a).map(k=>`<i class="${k===cur?'on':''}"></i>`).join('')}</span>`;
 }
 // flick up/down on a tile: step through today / week / month / all time (or a measurement's stats)
 function cycleShow(id, dir){
   const a = findAcc(id);
   if(!a) return;
-  const keys = isLevel(a) ? LEVEL_STATS.map(([k])=>k) : PERIODS.map(([k])=>k);
-  const cur = isLevel(a) ? levelKey(a) : (a.show||'today');
+  const keys = showKeys(a), cur = showKey(a);
   a.show = keys[(keys.indexOf(cur) + dir + keys.length) % keys.length];
   if(navigator.vibrate) navigator.vibrate(8);
   save(); render();
@@ -695,6 +702,7 @@ function tileHTML(a){
       oncontextmenu="return false">
       <span class="t-del">×</span>
       <span class="t-name">${esc(a.name)}</span>
+      ${dotsHTML(a)}
       <span class="t-count">${fmtRatio(tileValue(a))}</span>
       <span class="t-sub">${!(n && d) ? 'pick two counters' : !isFinite(ratioConv(a).k) ? 'unit mismatch' : esc([a.unit || (n.name+' ÷ '+d.name), periodLabel(a)].filter(Boolean).join(' · '))}</span>
     </button>`;
@@ -711,6 +719,7 @@ function tileHTML(a){
       oncontextmenu="return false">
       <span class="t-del">×</span>
       <span class="t-name">${esc(a.name)}</span>
+      ${dotsHTML(a)}
       <span class="t-count">${isLevel(a) && levelKey(a)==='change' ? signed(tileValue(a)) : fmt(tileValue(a))}</span>
       <span class="t-sub">${esc([a.unit, isLevel(a) && levelKey(a)==='now' ? levelDelta(a) : periodLabel(a)].filter(Boolean).join(' · '))}</span>
       ${split ? `<span class="t-minus">−${fmt(subAmt(a))}</span>` : ''}
