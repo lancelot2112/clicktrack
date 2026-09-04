@@ -359,9 +359,12 @@ const $ = sel => document.querySelector(sel);
 function dayKey(d=new Date()){
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 }
+// snap sums to 6 decimals so 0.1 + 0.2 − 0.3 is exactly 0, not 5e-17 (which would print as "-0")
+function snap(n){ const v = Math.round(n * 1e6) / 1e6; return v === 0 ? 0 : v; }
 function fmt(n){
   if(!isFinite(n)) return '0';
-  return (Math.round(n*100)/100).toLocaleString();
+  const v = Math.round(n*100)/100;
+  return (v === 0 ? 0 : v).toLocaleString();   // v===0 is also true for -0; this drops the sign
 }
 function findAcc(id){ return state.accs.find(a=>a.id===id); }
 function prune(acc){
@@ -528,8 +531,8 @@ function addAmount(id, amt){
   const acc = findAcc(id);
   if(!acc || !isFinite(amt) || amt===0) return;
   const k = dayKey();
-  acc.byDay[k] = (acc.byDay[k]||0) + amt;
-  acc.lifetime = (acc.lifetime||0) + amt;
+  acc.byDay[k] = snap((acc.byDay[k]||0) + amt);
+  acc.lifetime = snap((acc.lifetime||0) + amt);
   prune(acc);
   lastAdd = {accId:id, amount:amt, dayKey:k};
   save(); render();
@@ -557,8 +560,8 @@ function undo(){
     if(lastAdd.prev === undefined) delete acc.byDay[lastAdd.dayKey];
     else acc.byDay[lastAdd.dayKey] = lastAdd.prev;
   }else if(acc){
-    acc.byDay[lastAdd.dayKey] = (acc.byDay[lastAdd.dayKey]||0) - lastAdd.amount;
-    acc.lifetime -= lastAdd.amount;
+    acc.byDay[lastAdd.dayKey] = snap((acc.byDay[lastAdd.dayKey]||0) - lastAdd.amount);
+    acc.lifetime = snap((acc.lifetime||0) - lastAdd.amount);
   }
   lastAdd = null; save(); render();
 }
@@ -568,7 +571,7 @@ function undoLabel(){
   if(lastAdd.kind==='level') return `Undo · ${esc(a.name)} back to ${fmt(lastAdd.from)}`;
   return `Undo ${signed(lastAdd.amount)} on ${esc(a.name)}`;
 }
-function signed(v){ return (v < 0 ? '−' : '+') + fmt(Math.abs(v)); }
+function signed(v){ v = Math.round(v*100)/100; return (v < 0 ? '−' : '+') + fmt(Math.abs(v)); }
 
 /* ---------- timer ---------- */
 function homeTimers(){ return state.homeTimers || [30,60,90]; }
