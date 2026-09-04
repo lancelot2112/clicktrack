@@ -178,6 +178,14 @@
     font-variant-numeric:tabular-nums; font-variation-settings:'wdth' 78;
   }
   .scrub-sub{margin-top:6px; font-size:12px; font-weight:600; color:var(--ink-soft); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  /* faint 14-day trace behind the tile's number */
+  .tile .t-spark{position:absolute; left:7px; right:7px; bottom:24px; height:26px; pointer-events:none; opacity:.26; overflow:visible;}
+  .tile.ratio .t-spark{bottom:16px;}
+  /* counter page: 30-day chart */
+  .chart{margin:8px 20px 0; touch-action:none; user-select:none; -webkit-user-select:none;}
+  .chart svg{display:block; width:100%; height:auto;}
+  .chart-cap{display:flex; justify-content:space-between; font-size:12px; font-weight:600; color:var(--ink-soft); margin-top:4px; min-height:16px;}
+  .chart-cap b{color:var(--ink); font-weight:800;}
   .bump{animation:bump .18s ease;}
   @keyframes bump{40%{transform:scale(1.06);}}
 
@@ -388,6 +396,85 @@ function periodValue(acc, p){
   if(p==='all') return acc.lifetime || 0;
   return acc.byDay[dayKey()] || 0;
 }
+/* ---------- daily series for charts ----------
+   tally: the day's total (0 when nothing logged)
+   level: the value entered that day, carried forward over gaps (null before the first entry)
+   ratio: that day's numerator ÷ denominator, converted (null when the denominator is 0) */
+function daySeries(a, days){
+  const out = [];
+  const d = new Date(); d.setDate(d.getDate() - (days-1));
+  let last = null;
+  if(isLevel(a)){ const first = dayKey(d); levelEntries(a).forEach(([k,v])=>{ if(k < first) last = v; }); }
+  const k = isRatio(a) ? ratioConv(a).k : 1;
+  const n = isRatio(a) ? findAcc(a.num) : null, dn = isRatio(a) ? findAcc(a.den) : null;
+  for(let i=0; i<days; i++, d.setDate(d.getDate()+1)){
+    const key = dayKey(d);
+    let v = null, has = false;
+    if(isLevel(a)){ if(key in a.byDay){ last = a.byDay[key]; has = true; } v = last; }
+    else if(isRatio(a)){ const dv = dn ? (dn.byDay[key]||0) : 0; v = (n && dv && isFinite(k)) ? (n.byDay[key]||0)/dv*k : null; has = v !== null; }
+    else { v = a.byDay[key] || 0; has = key in a.byDay; }
+    out.push({key, v, has});
+  }
+  return out;
+}
+function seriesUnit(a){ return isRatio(a) ? (a.unit||'') : (a.unit||''); }
+// tiny trace for a tile: bars for tallies, an area line for measurements and ratios
+function sparkHTML(a){
+  if(a.spark === false) return '';
+  const S = daySeries(a, 14), vals = S.map(p=>p.v).filter(v=>v!==null);
+  if(!vals.length || !vals.some(v=>v)) return '';
+  const W = 100, H = 26, n = S.length;
+  if(!isLevel(a) && !isRatio(a)){
+    const max = Math.max(...vals) || 1, bw = W/n;
+    return `<svg class="t-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${
+      S.map((p,i)=> p.v ? `<rect x="${(i*bw+0.6).toFixed(1)}" y="${(H - p.v/max*H).toFixed(1)}" width="${(bw-1.2).toFixed(1)}" height="${(p.v/max*H).toFixed(1)}" fill="#fff"/>` : '').join('')}</svg>`;
+  }
+  const min = Math.min(...vals), max = Math.max(...vals), span = (max - min) || 1;
+  const pts = S.map((p,i)=> p.v === null ? null : [(i/(n-1))*W, H - 2 - (p.v-min)/span*(H-4)]);
+  let path = '', open = false;
+  pts.forEach(pt=>{ if(!pt){ open = false; return; } path += (open ? ' L' : ' M') + pt[0].toFixed(1)+' '+pt[1].toFixed(1); open = true; });
+  return `<svg class="t-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    <path d="${path}" fill="none" stroke="#fff" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>`;
+}
+// counter page: 30 days, tap or drag to read a day
+let chartSeries = null;
+function chartHTML(a){
+  const S = daySeries(a, 30); chartSeries = {a, S};
+  const vals = S.map(p=>p.v).filter(v=>v!==null);
+  const W = 300, H = 100, pad = 6, n = S.length;
+  const lvl = isLevel(a) || isRatio(a);
+  let body = '';
+  if(!vals.length){ body = ''; }
+  else if(!lvl){
+    const max = Math.max(...vals) || 1, bw = W/n;
+    body = S.map((p,i)=>`<rect x="${(i*bw+1).toFixed(1)}" y="${(H - p.v/max*(H-pad)).toFixed(1)}" width="${(bw-2).toFixed(1)}" height="${(p.v/max*(H-pad)).toFixed(1)}" rx="1.5" fill="${a.color}" opacity="${i===n-1?1:0.45}"/>`).join('');
+  }else{
+    const min = Math.min(...vals), max = Math.max(...vals), span = (max - min) || 1;
+    const y = v => H - pad - (v-min)/span*(H-2*pad);
+    const x = i => pad + i/(n-1)*(W-2*pad);
+    let path = '', open = false;
+    S.forEach((p,i)=>{ if(p.v===null){ open=false; return; } path += (open?' L':' M')+x(i).toFixed(1)+' '+y(p.v).toFixed(1); open = true; });
+    body = `<path d="${path}" fill="none" stroke="${a.color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>` +
+      S.map((p,i)=> p.has ? `<circle cx="${x(i).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="${i===n-1?4:2.5}" fill="${a.color}"/>` : '').join('');
+  }
+  const unit = seriesUnit(a);
+  const cap = vals.length ? `last 30 days · ${lvl ? 'low '+fmt(Math.min(...vals))+' · high '+fmt(Math.max(...vals)) : 'best day '+fmt(Math.max(...vals))}${unit?' '+esc(unit):''}` : 'no history yet';
+  return `
+  <div class="chart" onpointerdown="chartHover(event)" onpointermove="chartHover(event)" onpointerup="chartLeave()" onpointercancel="chartLeave()">
+    <svg viewBox="0 0 ${W} ${H}"><line x1="0" y1="${H-0.5}" x2="${W}" y2="${H-0.5}" stroke="var(--line)" stroke-width="1"/>${body}</svg>
+    <div class="chart-cap" id="chartCap" data-default="${cap}"><span>${cap}</span></div>
+  </div>`;
+}
+function chartHover(ev){
+  if(!chartSeries || (ev.type==='pointermove' && !ev.buttons)) return;
+  const svg = ev.currentTarget.querySelector('svg'), r = svg.getBoundingClientRect();
+  const i = Math.max(0, Math.min(chartSeries.S.length-1, Math.floor((ev.clientX - r.left)/r.width*chartSeries.S.length)));
+  const p = chartSeries.S[i], a = chartSeries.a;
+  const d = new Date(p.key+'T00:00'); const label = d.toLocaleDateString(undefined, {month:'short', day:'numeric'});
+  const unit = seriesUnit(a);
+  $('#chartCap').innerHTML = `<span>${label}</span><b>${p.v===null ? '—' : fmt(p.v)+(unit?' '+esc(unit):'')}</b>`;
+}
+function chartLeave(){ const c = $('#chartCap'); if(c) c.innerHTML = `<span>${c.dataset.default}</span>`; }
 function isLevel(a){ return a.kind === 'level'; }
 // measurement counters store the value set on each day; "current" is the newest entry
 function levelEntries(a){ return Object.keys(a.byDay).sort().map(k=>[k, a.byDay[k]]); }
@@ -714,6 +801,7 @@ function tileHTML(a){
       oncontextmenu="return false">
       <span class="t-del">×</span>
       <span class="t-name">${esc(a.name)}</span>
+      ${sparkHTML(a)}
       ${dotsHTML(a)}
       <span class="t-count ${countClass(fmtRatio(tileValue(a)))}">${fmtRatio(tileValue(a))}</span>
       <span class="t-sub">${!(n && d) ? 'pick two counters' : !isFinite(ratioConv(a).k) ? 'unit mismatch'
@@ -732,6 +820,7 @@ function tileHTML(a){
       oncontextmenu="return false">
       <span class="t-del">×</span>
       <span class="t-name">${esc(a.name)}</span>
+      ${sparkHTML(a)}
       ${dotsHTML(a)}
       <span class="t-count ${countClass(isLevel(a) && levelKey(a)==='change' ? signed(tileValue(a)) : fmt(tileValue(a)))}">${isLevel(a) && levelKey(a)==='change' ? signed(tileValue(a)) : fmt(tileValue(a))}</span>
       <span class="t-sub">${esc([a.unit, isLevel(a) && levelKey(a)==='now' ? levelDelta(a) : ''].filter(Boolean).join(' · '))}</span>
@@ -1054,6 +1143,7 @@ function counterView(id){
     <span style="width:64px"></span>
   </div>
   ${stats}
+  ${a ? chartHTML(a) : ''}
   <div class="form">
     ${a ? '' : `
     <div><label>Type</label>
@@ -1110,6 +1200,11 @@ function counterView(id){
         ${(lvl ? LEVEL_STATS : PERIODS).map(([p,l])=>`<button class="${(lvl ? (a ? levelKey(a) : 'now') : show)===p?'sel':''}" onclick="pickSeg(this,'show','${p}')">${l}</button>`).join('')}
       </div>
       <div class="hint">Flick a tile up or down on the main screen to switch this.</div></div>
+    <div><label>Sparkline on tile</label>
+      <div class="seg" id="segSpark" data-spark="${a && a.spark===false ? '0' : '1'}">
+        <button class="${a && a.spark===false ? '' : 'sel'}" onclick="pickSeg(this,'spark','1')">On</button>
+        <button class="${a && a.spark===false ? 'sel' : ''}" onclick="pickSeg(this,'spark','0')">Off</button>
+      </div></div>
     <div><label>Color</label><div class="swatches" data-color="${sel}">${sw}</div></div>
     <button class="save tapbtn" onclick="saveForm(${a?`'${a.id}'`:'null'})">${a?'Save':'Create counter'}</button>
     ${a?`<button class="danger" onclick="delAcc('${a.id}')">Delete this counter</button>`:''}
@@ -1197,6 +1292,7 @@ function saveForm(id){
   const seg = $('#segShow');
   const show = seg ? (seg.dataset.show || 'today') : 'today';
   const kind = id ? (findAcc(id).kind||'tally') : (view.kind||'tally');
+  const spark = $('#segSpark').dataset.spark !== '0';
   const tapEl = $('#fTap'), subEl = $('#fSub');
   let tap = tapEl ? parseFloat(tapEl.value) : 1;
   if(!isFinite(tap) || tap===0) tap = 1;
@@ -1214,11 +1310,11 @@ function saveForm(id){
   const val = valEl ? parseFloat(valEl.value) : NaN;
   if(id){
     const a = findAcc(id);
-    Object.assign(a,{name,unit,group,color,show,tap,sub,unitId});
+    Object.assign(a,{name,unit,group,color,show,tap,sub,unitId,spark});
     if(kind==='ratio') Object.assign(a,{num:ratio.num,den:ratio.den,unit:ratio.unit,showNum:ratio.showNum,showDen:ratio.showDen,scale:ratio.scale});
     if(kind==='level' && isFinite(val) && val !== levelCurrent(a)) setLevel(id, val);
   }else{
-    const acc = {id:'a'+Date.now(),kind,name,unit,group,color,show,tap,sub,unitId,lifetime:0,byDay:{}};
+    const acc = {id:'a'+Date.now(),kind,name,unit,group,color,show,tap,sub,unitId,spark,lifetime:0,byDay:{}};
     if(kind==='level') acc.byDay[dayKey()] = isFinite(val) ? Math.round(val*100)/100 : 0;
     if(kind==='ratio') Object.assign(acc,{num:ratio.num,den:ratio.den,showNum:ratio.showNum,showDen:ratio.showDen,scale:ratio.scale});
     state.accs.push(acc);
