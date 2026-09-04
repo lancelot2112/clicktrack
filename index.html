@@ -80,14 +80,18 @@
     transform:scale(1.08); box-shadow:0 14px 30px rgba(0,0,0,.35);
   }
   .board{flex:1; padding:4px 14px 20px;}
-  .group-h{margin:18px 4px 8px; font-size:14px; font-weight:800; color:var(--ink-soft); display:flex; align-items:center; gap:4px;}
-  .group-h span{flex:1;}
-  .g-btn{
-    display:none; width:34px; height:30px; border-radius:8px; font-size:13px; font-weight:800;
-    background:var(--panel); border:2px solid var(--line); color:var(--ink-soft);
+  .group{border:2px dashed transparent; border-radius:16px; margin:0 -6px; padding:0 6px;}
+  .group-h{margin:18px 4px 8px; font-size:14px; font-weight:800; color:var(--ink-soft); display:flex; align-items:center; gap:6px;}
+  .group-h .grip{display:none; letter-spacing:-.15em; color:var(--line); font-size:16px; line-height:1;}
+  /* edit mode: each group sits in a dashed box; drag the header to reorder groups */
+  .board.editing .group{border-color:var(--line); margin:10px -6px 0; padding:2px 6px 8px;}
+  .board.editing .group-h{margin-top:6px; padding:6px 0; cursor:grab; touch-action:none; user-select:none; -webkit-user-select:none;}
+  .board.editing .grip{display:inline;}
+  .group.placeholder{opacity:.3;}
+  .group.ghost{
+    position:fixed; z-index:30; margin:0; pointer-events:none; background:var(--bg);
+    border-color:var(--ink-soft); box-shadow:0 14px 30px rgba(0,0,0,.3);
   }
-  .g-btn:disabled{opacity:.3;}
-  .board.editing .g-btn{display:inline-block;}
   .tiles{display:grid; grid-template-columns:repeat(auto-fill,minmax(78px,1fr)); gap:7px;}
   .tile{
     position:relative; display:flex; flex-direction:column; align-items:flex-start; gap:0; text-align:left;
@@ -621,22 +625,15 @@ function groupNames(){
   const rest = present.filter(g=>!order.includes(g)).sort((x,y)=>(x==='Other')-(y==='Other') || x.localeCompare(y));
   return [...order, ...rest];
 }
-function moveGroup(i, dir){
-  const names = groupNames(), j = i + dir;
-  if(j < 0 || j >= names.length) return;
-  [names[i], names[j]] = [names[j], names[i]];
-  state.groupOrder = names;
-  save(); render();
-}
 function homeView(){
   const groups = {};
   state.accs.forEach(a=>{ (groups[groupOf(a)] = groups[groupOf(a)] || []).push(a); });
   const names = groupNames();
-  const sections = names.map((g,i)=>`
-    ${(names.length>1 || g!=='Other') ? `<div class="group-h" data-group="${esc(g)}"><span>${esc(g)}</span>
-      <button class="g-btn tapbtn" onclick="moveGroup(${i},-1)" ${i===0?'disabled':''}>▲</button>
-      <button class="g-btn tapbtn" onclick="moveGroup(${i},1)" ${i===names.length-1?'disabled':''}>▼</button></div>` : ''}
-    <div class="tiles" data-group="${esc(g)}">${groups[g].map(tileHTML).join('')}</div>`).join('');
+  const sections = names.map(g=>`
+    <div class="group" data-group="${esc(g)}">
+      ${(names.length>1 || g!=='Other') ? `<div class="group-h" onpointerdown="groupDown(event)" oncontextmenu="return false"><span class="grip">⋮⋮</span><span>${esc(g)}</span></div>` : ''}
+      <div class="tiles" data-group="${esc(g)}">${groups[g].map(tileHTML).join('')}</div>
+    </div>`).join('');
   const last = lastAdd && findAcc(lastAdd.accId);
   return `
     <header class="home">
@@ -647,7 +644,7 @@ function homeView(){
           <button class="newbtn2 tapbtn" onclick="go('counter',null)">+ New</button>
         </div>
       </div>
-      <p>${editMode ? 'Tap a tile to edit it · drag to reorder or regroup · × to delete' : 'Tap to count · drag for any amount · hold a timer to edit it'}</p>
+      <p>${editMode ? 'Tap a tile to edit it · drag tiles or group headers to reorder · × to delete' : 'Tap to count · drag for any amount · hold a timer to edit it'}</p>
     </header>
     ${warnbar()}
     <div class="board ${editMode?'editing':''}" onpointermove="boardMove(event)" onpointerup="boardUp(event)" onpointercancel="boardCancel()">
@@ -783,6 +780,13 @@ function editDown(ev, id){
   drag = {id, el:ev.currentTarget, x0:ev.clientX, y0:ev.clientY, started:false,
           del:!!(ev.target.closest && ev.target.closest('.t-del'))};
 }
+function groupDown(ev){
+  if(!editMode) return;
+  const box = ev.currentTarget.closest('.group');
+  if(!box) return;
+  try{ $('.board').setPointerCapture(ev.pointerId); }catch(e){}
+  drag = {group:true, el:box, x0:ev.clientX, y0:ev.clientY, started:false};
+}
 function startDrag(){
   const el = drag.el, r = el.getBoundingClientRect();
   const g = el.cloneNode(true);
@@ -800,13 +804,21 @@ function boardMove(ev){
     if(drag.del || Math.hypot(dx, dy) < 8) return;
     startDrag();
   }
-  drag.ghost.style.transform = `translate(${dx}px,${dy}px) scale(1.08)`;
+  drag.ghost.style.transform = drag.group ? `translate(0,${dy}px)` : `translate(${dx}px,${dy}px) scale(1.08)`;
   // keep the board scrolling when dragging near the top or bottom of the screen
   if(ev.clientY < 80) window.scrollBy(0, -8);
   else if(ev.clientY > window.innerHeight - 100) window.scrollBy(0, 8);
   const under = document.elementFromPoint(ev.clientX, ev.clientY);
   if(!under) return;
   const el = drag.el;
+  if(drag.group){   // groups stack vertically: slot above or below whichever box we're over
+    const g = under.closest('.group');
+    if(g && g !== el){
+      const r = g.getBoundingClientRect();
+      g.parentNode.insertBefore(el, ev.clientY < r.top + r.height/2 ? g : g.nextSibling);
+    }
+    return;
+  }
   const t = under.closest('.tile');
   if(t && t !== el){
     const r = t.getBoundingClientRect();
@@ -814,9 +826,9 @@ function boardMove(ev){
     t.parentNode.insertBefore(el, before ? t : t.nextSibling);
     return;
   }
-  const h = under.closest('.group-h');
-  const c = h ? h.nextElementSibling : under.closest('.tiles');
-  if(c && c.classList.contains('tiles') && el !== c.lastElementChild) c.appendChild(el);
+  const box = under.closest('.group');
+  const c = under.closest('.tiles') || (box && box.querySelector('.tiles'));
+  if(c && el !== c.lastElementChild) c.appendChild(el);
 }
 // read the new order (and group) straight from the DOM
 function commitOrder(movedId){
@@ -838,9 +850,12 @@ function boardUp(ev){
   const d = drag; drag = null;
   if(d.started){
     d.ghost.remove(); d.el.classList.remove('placeholder');
-    commitOrder(d.id); save(); render();
+    if(d.group) state.groupOrder = [...document.querySelectorAll('.group[data-group]')].map(g=>g.dataset.group);
+    else commitOrder(d.id);
+    save(); render();
     return;
   }
+  if(d.group) return;
   if(d.del){ delAcc(d.id); return; }
   go('counter', d.id);
 }
