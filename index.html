@@ -713,7 +713,8 @@ function tileHTML(a){
       <span class="t-name">${esc(a.name)}</span>
       ${dotsHTML(a)}
       <span class="t-count ${countClass(fmtRatio(tileValue(a)))}">${fmtRatio(tileValue(a))}</span>
-      <span class="t-sub">${!(n && d) ? 'pick two counters' : !isFinite(ratioConv(a).k) ? 'unit mismatch' : esc(a.unit || (n.name+' ÷ '+d.name))}</span>
+      <span class="t-sub">${!(n && d) ? 'pick two counters' : !isFinite(ratioConv(a).k) ? 'unit mismatch'
+        : !periodValue(d, showKey(a)) ? esc(d.name)+' = 0' : esc(a.unit || (n.name+' ÷ '+d.name))}</span>
     </button>`;
   }
   const tap = isFinite(a.tap) ? a.tap : 1;
