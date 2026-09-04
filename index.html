@@ -113,8 +113,16 @@
     box-shadow: inset 0 2px 6px rgba(0,0,0,.28), 0 1px 3px rgba(0,0,0,.15);
   }
   /* vertical dot column on the right edge: which of the flick-up/down views is on */
-  .tile .t-dots{position:absolute; top:27px; right:7px; display:flex; flex-direction:column; gap:3px;}
-  .tile .t-dots i{display:block; width:4px; height:4px; border-radius:50%; background:rgba(255,255,255,.38);}
+  .tile .t-view{
+    position:absolute; top:22px; right:7px; font-size:8px; font-weight:800; line-height:1;
+    color:rgba(255,255,255,.9); letter-spacing:.02em; text-shadow:0 1px 2px rgba(0,0,0,.18);
+  }
+  .tile .t-dots{position:absolute; top:34px; right:8px; display:flex; flex-direction:column; gap:3px;}
+  .tile .t-dots i{display:block; width:3.5px; height:3.5px; border-radius:50%; background:rgba(255,255,255,.38);}
+  /* long numbers step down so they clear the view column */
+  .tile .t-count.n5{font-size:19px;}
+  .tile .t-count.n7{font-size:15px;}
+  .tile .t-count.n9{font-size:11px;}
   .tile .t-dots i.on{background:#fff; box-shadow:0 0 2px rgba(0,0,0,.3);}
   .tile .t-name{
     font-size:10.5px; font-weight:700; width:100%; overflow:hidden;
@@ -478,15 +486,16 @@ function tileValue(a){
   return periodValue(a, a.show);
 }
 // what the tile is showing, for its unit line ('' for the default: today / now)
-const SHORT_LABEL = {week:'wk', month:'mo', all:'all', change:'Δ', avg7:'7d avg', avg30:'30d avg'};
+const SHORT_LABEL = {today:'d', week:'wk', month:'mo', all:'all', now:'now', change:'Δ', avg7:'7d', avg30:'30d'};
 function showKeys(a){ return (isLevel(a) ? LEVEL_STATS : PERIODS).map(([k])=>k); }
 function showKey(a){ return isLevel(a) ? levelKey(a) : (PERIODS.some(([k])=>k===a.show) ? a.show : 'today'); }
 function periodLabel(a){ return SHORT_LABEL[showKey(a)] || ''; }
-// four dots in the tile corner: which of the flick-able views is on
+// right-edge column: the view's short label over four dots showing which flick-up/down view is on
 function dotsHTML(a){
   const cur = showKey(a);
-  return `<span class="t-dots">${showKeys(a).map(k=>`<i class="${k===cur?'on':''}"></i>`).join('')}</span>`;
+  return `<span class="t-view">${periodLabel(a)}</span><span class="t-dots">${showKeys(a).map(k=>`<i class="${k===cur?'on':''}"></i>`).join('')}</span>`;
 }
+function countClass(text){ const n = String(text).length; return n >= 9 ? 'n9' : n >= 7 ? 'n7' : n >= 5 ? 'n5' : ''; }
 // flick up/down on a tile: step through today / week / month / all time (or a measurement's stats)
 function cycleShow(id, dir){
   const a = findAcc(id);
@@ -703,8 +712,8 @@ function tileHTML(a){
       <span class="t-del">×</span>
       <span class="t-name">${esc(a.name)}</span>
       ${dotsHTML(a)}
-      <span class="t-count">${fmtRatio(tileValue(a))}</span>
-      <span class="t-sub">${!(n && d) ? 'pick two counters' : !isFinite(ratioConv(a).k) ? 'unit mismatch' : esc([a.unit || (n.name+' ÷ '+d.name), periodLabel(a)].filter(Boolean).join(' · '))}</span>
+      <span class="t-count ${countClass(fmtRatio(tileValue(a)))}">${fmtRatio(tileValue(a))}</span>
+      <span class="t-sub">${!(n && d) ? 'pick two counters' : !isFinite(ratioConv(a).k) ? 'unit mismatch' : esc(a.unit || (n.name+' ÷ '+d.name))}</span>
     </button>`;
   }
   const tap = isFinite(a.tap) ? a.tap : 1;
@@ -720,8 +729,8 @@ function tileHTML(a){
       <span class="t-del">×</span>
       <span class="t-name">${esc(a.name)}</span>
       ${dotsHTML(a)}
-      <span class="t-count">${isLevel(a) && levelKey(a)==='change' ? signed(tileValue(a)) : fmt(tileValue(a))}</span>
-      <span class="t-sub">${esc([a.unit, isLevel(a) && levelKey(a)==='now' ? levelDelta(a) : periodLabel(a)].filter(Boolean).join(' · '))}</span>
+      <span class="t-count ${countClass(isLevel(a) && levelKey(a)==='change' ? signed(tileValue(a)) : fmt(tileValue(a)))}">${isLevel(a) && levelKey(a)==='change' ? signed(tileValue(a)) : fmt(tileValue(a))}</span>
+      <span class="t-sub">${esc([a.unit, isLevel(a) && levelKey(a)==='now' ? levelDelta(a) : ''].filter(Boolean).join(' · '))}</span>
       ${split ? `<span class="t-minus">−${fmt(subAmt(a))}</span>` : ''}
       <span class="t-tap">${badge}</span>
     </button>`;
