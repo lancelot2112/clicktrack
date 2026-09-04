@@ -95,7 +95,7 @@
   .tiles{display:grid; grid-template-columns:repeat(auto-fill,minmax(78px,1fr)); gap:7px;}
   .tile{
     position:relative; display:flex; flex-direction:column; align-items:flex-start; gap:0; text-align:left;
-    user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; touch-action:pan-y;
+    user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; touch-action:none;
     color:#fff; border-radius:14px; padding:8px 9px 7px; min-height:78px;
     background:var(--tile-c,#888);
     background:
@@ -467,10 +467,29 @@ function ratioValue(a, p){
 }
 function fmtRatio(v){ return isFinite(v) ? fmt(v) : '—'; }
 function tallies(){ return state.accs.filter(a=>(a.kind||'tally')==='tally'); }
+function levelKey(a){ return LEVEL_STATS.some(([k])=>k===a.show) ? a.show : 'now'; }
 function tileValue(a){
-  if(isLevel(a)) return levelCurrent(a);
+  if(isLevel(a)) return levelStat(a, levelKey(a));
   if(isRatio(a)) return ratioValue(a, a.show);
   return periodValue(a, a.show);
+}
+// what the tile is showing, for its unit line ('' for the default: today / now)
+function periodLabel(a){
+  if(isLevel(a)){ const k = levelKey(a); return k==='now' ? '' : LEVEL_STATS.find(([x])=>x===k)[1].toLowerCase(); }
+  const p = PERIODS.find(([x])=>x===a.show);
+  return (!p || p[0]==='today') ? '' : p[1].toLowerCase();
+}
+// flick up/down on a tile: step through today / week / month / all time (or a measurement's stats)
+function cycleShow(id, dir){
+  const a = findAcc(id);
+  if(!a) return;
+  const keys = isLevel(a) ? LEVEL_STATS.map(([k])=>k) : PERIODS.map(([k])=>k);
+  const cur = isLevel(a) ? levelKey(a) : (a.show||'today');
+  a.show = keys[(keys.indexOf(cur) + dir + keys.length) % keys.length];
+  if(navigator.vibrate) navigator.vibrate(8);
+  save(); render();
+  const el = $('#tile-'+id+' .t-count');
+  if(el){ el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump'); }
 }
 
 /* ---------- beep ---------- */
@@ -645,7 +664,7 @@ function homeView(){
           <button class="newbtn2 tapbtn" onclick="go('counter',null)">+ New</button>
         </div>
       </div>
-      <p>${editMode ? 'Tap a tile to edit it · drag tiles or group headers to reorder · × to delete' : 'Tap to count · drag for any amount · hold a timer to edit it'}</p>
+      <p>${editMode ? 'Tap a tile to edit it · drag tiles or group headers to reorder · × to delete' : 'Tap to count · drag for an amount · flick up/down for the period · hold a timer to edit it'}</p>
     </header>
     ${warnbar()}
     <div class="board ${editMode?'editing':''}" onpointermove="boardMove(event)" onpointerup="boardUp(event)" onpointercancel="boardCancel()">
@@ -677,7 +696,7 @@ function tileHTML(a){
       <span class="t-del">×</span>
       <span class="t-name">${esc(a.name)}</span>
       <span class="t-count">${fmtRatio(tileValue(a))}</span>
-      <span class="t-sub">${!(n && d) ? 'pick two counters' : !isFinite(ratioConv(a).k) ? 'unit mismatch' : esc(a.unit || (n.name+' ÷ '+d.name))}</span>
+      <span class="t-sub">${!(n && d) ? 'pick two counters' : !isFinite(ratioConv(a).k) ? 'unit mismatch' : esc([a.unit || (n.name+' ÷ '+d.name), periodLabel(a)].filter(Boolean).join(' · '))}</span>
     </button>`;
   }
   const tap = isFinite(a.tap) ? a.tap : 1;
@@ -692,8 +711,8 @@ function tileHTML(a){
       oncontextmenu="return false">
       <span class="t-del">×</span>
       <span class="t-name">${esc(a.name)}</span>
-      <span class="t-count">${fmt(tileValue(a))}</span>
-      <span class="t-sub">${esc(isLevel(a) ? [a.unit, levelDelta(a)].filter(Boolean).join(' · ') : (a.unit||''))}</span>
+      <span class="t-count">${isLevel(a) && levelKey(a)==='change' ? signed(tileValue(a)) : fmt(tileValue(a))}</span>
+      <span class="t-sub">${esc([a.unit, isLevel(a) && levelKey(a)==='now' ? levelDelta(a) : periodLabel(a)].filter(Boolean).join(' · '))}</span>
       ${split ? `<span class="t-minus">−${fmt(subAmt(a))}</span>` : ''}
       <span class="t-tap">${badge}</span>
     </button>`;
@@ -704,7 +723,7 @@ const SPLIT_AT = 0.36;   // fraction of tile width that is the "−" zone
 let pressInfo = null;
 function pressDown(ev, key, onLong){
   cancelPress();
-  pressInfo = {key, x:ev.clientX, y:ev.clientY, long:false, t:null};
+  pressInfo = {key, x:ev.clientX, y:ev.clientY, t0:Date.now(), long:false, t:null};
   if(onLong) pressInfo.t = setTimeout(()=>{
     if(pressInfo && pressInfo.key===key){
       pressInfo.long = true;
@@ -745,23 +764,37 @@ function tileDown(ev, id){
   const a = findAcc(id);
   if(!a) return;
   if(editMode){ editDown(ev, id); return; }
-  if(isRatio(a)) return;   // computed tile: nothing to tap
   try{ ev.currentTarget.setPointerCapture(ev.pointerId); }catch(e){}
   pressDown(ev, 'tile-'+id, null);
   pressInfo.side = tileSide(ev, a);
+  pressInfo.noTap = isRatio(a);   // computed tile: only the vertical flick does anything
 }
 function tileMove(ev, id){
   if(drag){ boardMove(ev); return; }
   if(scrub){ scrubUpdate(ev.clientX); return; }
   if(!pressInfo || pressInfo.key!=='tile-'+id) return;
   const dx = ev.clientX - pressInfo.x, dy = ev.clientY - pressInfo.y;
-  if(Math.abs(dx) > 12 && Math.abs(dx) >= Math.abs(dy)) scrubBegin(id, pressInfo.side, ev.clientX);
-  else if(Math.abs(dy) > 12) cancelPress();   // vertical = scrolling
+  if(pressInfo.axis === 'y'){
+    // a slow vertical drag scrolls the page by hand; a quick one is a flick (handled on release)
+    if(!pressInfo.scrolling && Date.now() - pressInfo.t0 > 220) pressInfo.scrolling = true;
+    if(pressInfo.scrolling) window.scrollBy(0, pressInfo.lastY - ev.clientY);
+    pressInfo.lastY = ev.clientY;
+    return;
+  }
+  if(Math.abs(dx) > 12 && Math.abs(dx) >= Math.abs(dy)){ if(pressInfo.noTap) cancelPress(); else scrubBegin(id, pressInfo.side, ev.clientX); }
+  else if(Math.abs(dy) > 12){ pressInfo.axis = 'y'; pressInfo.lastY = ev.clientY; pressInfo.scrolling = Date.now() - pressInfo.t0 > 220; }
 }
 function tileUp(ev, id){
   if(drag){ boardUp(ev); return; }
   if(scrub){ scrubEnd(true); return; }
-  if(!pressUp('tile-'+id)) return;
+  if(pressInfo && pressInfo.key==='tile-'+id && pressInfo.axis === 'y'){
+    const dy = ev.clientY - pressInfo.y, flick = !pressInfo.scrolling && Math.abs(dy) >= 30;
+    cancelPress();
+    if(flick) cycleShow(id, dy < 0 ? 1 : -1);   // up = next period, down = previous
+    return;
+  }
+  const noTap = pressInfo && pressInfo.noTap;
+  if(!pressUp('tile-'+id) || noTap) return;
   const a = findAcc(id);
   if(!a) return;
   const amt = tileTapAmount(a, tileSide(ev, a));
@@ -1050,11 +1083,11 @@ function counterView(id){
         ? 'Tap the right of the tile to nudge up, the left to nudge down. Drag to slide the value.'
         : 'Right side of the tile adds, left third subtracts. Leave subtract blank for a whole-tile counter. Drag a tile to pick any amount.'}</div>
     </div>`}
-    ${lvl ? '' : `
     <div><label>Tile shows</label>
-      <div class="seg" id="segShow" data-show="${show}">
-        ${PERIODS.map(([p,l])=>`<button class="${show===p?'sel':''}" onclick="pickSeg(this,'show','${p}')">${l}</button>`).join('')}
-      </div></div>`}
+      <div class="seg" id="segShow" data-show="${lvl ? (a ? levelKey(a) : 'now') : show}">
+        ${(lvl ? LEVEL_STATS : PERIODS).map(([p,l])=>`<button class="${(lvl ? (a ? levelKey(a) : 'now') : show)===p?'sel':''}" onclick="pickSeg(this,'show','${p}')">${l}</button>`).join('')}
+      </div>
+      <div class="hint">Flick a tile up or down on the main screen to switch this.</div></div>
     <div><label>Color</label><div class="swatches" data-color="${sel}">${sw}</div></div>
     <button class="save tapbtn" onclick="saveForm(${a?`'${a.id}'`:'null'})">${a?'Save':'Create counter'}</button>
     ${a?`<button class="danger" onclick="delAcc('${a.id}')">Delete this counter</button>`:''}
